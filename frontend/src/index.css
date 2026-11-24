@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #070b14;
+    background-image:
+      radial-gradient(at 12% 8%, rgba(99, 102, 241, 0.12) 0px, transparent 42%),
+      radial-gradient(at 88% 12%, rgba(139, 92, 246, 0.1) 0px, transparent 40%),
+      radial-gradient(at 50% 96%, rgba(14, 165, 233, 0.06) 0px, transparent 50%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  .tm-card {
+    @apply rounded-2xl border border-slate-800/80 bg-[#0D1424]/90 backdrop-blur-md shadow-lg shadow-black/20;
+  }
+  .tm-card-hover {
+    @apply tm-card transition-all duration-200 hover:border-indigo-500/40 hover:shadow-glow;
+  }
+  .tm-input {
+    @apply w-full rounded-xl border border-slate-700/80 bg-[#080E1B] px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/25 transition;
+  }
+  .tm-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-900/40 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.99];
+  }
+  .tm-btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-slate-700/80 bg-slate-800/70 px-4 py-2.5 text-sm font-medium text-slate-200 hover:bg-slate-700/80 hover:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all;
+  }
+  .tm-badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+}
+
+/* Custom sleek dark scrollbar */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: #070b14;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
