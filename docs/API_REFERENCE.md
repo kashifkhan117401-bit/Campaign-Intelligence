@@ -1,4 +1,4 @@
-# TubeMind AI — REST API Reference
+# Campaign Intelligence — REST API Reference
 
 Interactive OpenAPI / Swagger UI is served live at `GET /docs` and `GET /redoc`.
 All protected routes require `Authorization: Bearer <access_token>`.
