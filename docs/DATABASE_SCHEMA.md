@@ -1,6 +1,6 @@
-# TubeMind AI — Database Schema Documentation
+# Campaign Intelligence — Database Schema Documentation
 
-TubeMind AI uses a normalized relational schema managed via **SQLAlchemy 2.0** and **Alembic** migrations. It targets **PostgreSQL 16** in production (via `psycopg`) and supports **SQLite** with WAL mode and enforced foreign keys for zero-friction local development.
+Campaign Intelligence uses a normalized relational schema managed via **SQLAlchemy 2.0** and **Alembic** migrations. It targets **PostgreSQL 16** in production (via `psycopg`) and supports **SQLite** with WAL mode and enforced foreign keys for zero-friction local development.
 
 ## Tables Overview (18 Tables)
 
