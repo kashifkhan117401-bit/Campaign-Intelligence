@@ -3,7 +3,7 @@
 In PythonAnywhere's Web tab WSGI configuration file, simply add:
 
     import sys
-    sys.path.insert(0, "/home/<YOUR_USERNAME>/tubemind-ai-/backend")
+    sys.path.insert(0, "/home/<YOUR_USERNAME>/Campaign-Intelligence/backend")
     from pythonanywhere_wsgi import application
 """
 from __future__ import annotations
