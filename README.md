@@ -4,7 +4,7 @@ Campaign Intelligence (*"Know Pakistan's audience before you spend a rupee."*) i
 
 ---
 
-## Key Capabilities
+## Key Capabilities 
 
 1. **Authentication & User Management**
    - Registration, login, logout, bcrypt password hashing, JWT access tokens, rotating refresh tokens, password reset flow, user profiles, onboarding wizard, and user-level data isolation.
