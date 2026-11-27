@@ -7,9 +7,9 @@ This repository uses Vercel's **Services** architecture (`vercel.json`) to deplo
 
 ---
 
-## Step 1: Create a Free PostgreSQL Database (Recommended)
+## Step 1: Create a Free PostgreSQL Database (Required)
 
-SQLite on Vercel `/tmp` is ephemeral and resets between cold starts. Create a free PostgreSQL database in ~1 minute:
+Create a free PostgreSQL database in ~1 minute:
 - **Neon** (https://neon.tech) or **Vercel Dashboard → Storage → Neon Postgres** or **Supabase** (https://supabase.com).
 - Copy the connection string (`postgresql://...`). The backend automatically converts `postgres://` / `postgresql://` to `postgresql+psycopg://` for SQLAlchemy and uses `NullPool` on Vercel serverless.
 

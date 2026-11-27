@@ -201,104 +201,127 @@ def test_gemini_audio_transcription(monkeypatch):
 
 def test_naive_datetime_normalization_and_scheduled_upload_dispatch(monkeypatch):
     from datetime import datetime, timedelta, timezone
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
+    from types import SimpleNamespace
 
-    from app.core.database import Base
-    from app.models.content import PublishingJob, UploadedMedia
-    from app.models.user import ConnectedYouTubeChannel, User
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/campaign_intelligence")
+    get_settings.cache_clear()
+
     from app.services import upload_scheduler
     from app.tasks import analysis_tasks
 
-    tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp_db.close()
-    engine = create_engine(f"sqlite:///{tmp_db.name}", connect_args={"check_same_thread": False})
-    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base.metadata.create_all(bind=engine)
-
-    monkeypatch.setattr(upload_scheduler, "SessionLocal", TestingSession)
-    monkeypatch.setattr(analysis_tasks, "SessionLocal", TestingSession)
-
     now = datetime.now(timezone.utc)
-    db = TestingSession()
+    due_job = SimpleNamespace(
+        id="job-due-1",
+        user_id="user-1",
+        media_id="media-1",
+        channel_id="chan-1",
+        status="scheduled_upload",
+        privacy_status="private",
+        scheduled_publish_at=(now - timedelta(seconds=10)).replace(tzinfo=None),
+        title="Due Scheduled Video",
+        description="Desc",
+        tags_json=["test"],
+        category_id="27",
+        pinned_comment="",
+        user_confirmed=True,
+        upload_progress=0,
+        youtube_video_id="",
+        youtube_video_url="",
+        error_message="",
+        api_response_json={},
+        published_at=None,
+    )
+    future_job = SimpleNamespace(
+        id="job-future-2",
+        user_id="user-1",
+        media_id="media-1",
+        channel_id="chan-1",
+        status="scheduled_upload",
+        privacy_status="public",
+        scheduled_publish_at=(now + timedelta(minutes=30)).replace(tzinfo=None),
+        title="Future Scheduled Video",
+        user_confirmed=True,
+    )
+    media = SimpleNamespace(
+        id="media-1",
+        user_id="user-1",
+        original_filename="clip.mp4",
+        file_path=__file__,
+        mime_type="video/mp4",
+    )
+    channel = SimpleNamespace(
+        id="chan-1",
+        user_id="user-1",
+        channel_id="UC_TEST",
+        channel_title="Test Channel",
+        encrypted_access_token=encrypt_secret("valid-token"),
+        encrypted_refresh_token=encrypt_secret("valid-refresh"),
+        token_expiry=(now + timedelta(hours=1)).replace(tzinfo=None),
+        is_active=True,
+        is_demo_connection=False,
+    )
+
+    class _FakeQuery:
+        def __init__(self, rows):
+            self._rows = list(rows)
+
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return list(self._rows)
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    class _FakeSession:
+        def __init__(self, job_rows):
+            self._job_rows = job_rows
+
+        def query(self, model):
+            name = getattr(model, "__name__", "")
+            if name == "PublishingJob":
+                return _FakeQuery(self._job_rows)
+            if name == "UploadedMedia":
+                return _FakeQuery([media])
+            if name == "ConnectedYouTubeChannel":
+                return _FakeQuery([channel])
+            return _FakeQuery([])
+
+        def add(self, _obj):
+            pass
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(upload_scheduler, "SessionLocal", lambda: _FakeSession([due_job, future_job]))
+    monkeypatch.setattr(analysis_tasks, "SessionLocal", lambda: _FakeSession([due_job]))
+
     try:
-        user = User(email="sched@tubemind.ai", hashed_password="x")
-        db.add(user)
-        db.flush()
+        assert upload_scheduler.as_utc(due_job.scheduled_publish_at).tzinfo == timezone.utc
 
-        media = UploadedMedia(
-            user_id=user.id,
-            original_filename="clip.mp4",
-            stored_filename="clip.mp4",
-            file_path=__file__,
-            mime_type="video/mp4",
-            file_size_bytes=100,
-        )
-        # Store a NAIVE future token_expiry (matching how SQLite returns DateTime columns)
-        channel = ConnectedYouTubeChannel(
-            user_id=user.id,
-            channel_id="UC_TEST",
-            channel_title="Test Channel",
-            encrypted_access_token=encrypt_secret("valid-token"),
-            encrypted_refresh_token=encrypt_secret("valid-refresh"),
-            token_expiry=(now + timedelta(hours=1)).replace(tzinfo=None),
-            is_active=True,
-            is_demo_connection=False,
-        )
-        db.add_all([media, channel])
-        db.flush()
-
-        due_job = PublishingJob(
-            user_id=user.id,
-            media_id=media.id,
-            channel_id=channel.id,
-            status="scheduled_upload",
-            privacy_status="private",
-            scheduled_publish_at=(now - timedelta(seconds=10)).replace(tzinfo=None),
-            title="Due Scheduled Video",
-            user_confirmed=True,
-        )
-        future_job = PublishingJob(
-            user_id=user.id,
-            media_id=media.id,
-            channel_id=channel.id,
-            status="scheduled_upload",
-            privacy_status="public",
-            scheduled_publish_at=(now + timedelta(minutes=30)).replace(tzinfo=None),
-            title="Future Scheduled Video",
-            user_confirmed=True,
-        )
-        db.add_all([due_job, future_job])
-        db.commit()
-        due_id, future_id = due_job.id, future_job.id
-    finally:
-        db.close()
-
-    try:
         dispatched: list[str] = []
         triggered = upload_scheduler.process_due_scheduled_uploads(now=now, dispatch_fn=dispatched.append)
-        assert triggered == [due_id]
-        assert dispatched == [due_id]
+        assert triggered == ["job-due-1"]
+        assert dispatched == ["job-due-1"]
+        assert future_job.status == "scheduled_upload"
 
-        # Run the actual publish task on the due job with mocked YouTube upload to verify naive token_expiry works
         with patch("app.tasks.analysis_tasks.upload_video_to_youtube", return_value={"id": "YT_AUTO_123"}) as mock_up:
-            analysis_tasks.run_youtube_publish_task(due_id, is_scheduled_auto_upload=True)
+            analysis_tasks.run_youtube_publish_task("job-due-1", is_scheduled_auto_upload=True)
             assert mock_up.called
             assert mock_up.call_args.kwargs["scheduled_publish_at"] is None
             assert mock_up.call_args.kwargs["privacy_status"] == "private"
 
-        db = TestingSession()
-        try:
-            done_job = db.query(PublishingJob).filter(PublishingJob.id == due_id).first()
-            still_waiting = db.query(PublishingJob).filter(PublishingJob.id == future_id).first()
-            assert done_job.status == "published"
-            assert done_job.youtube_video_id == "YT_AUTO_123"
-            assert still_waiting.status == "scheduled_upload"
-        finally:
-            db.close()
+        assert due_job.status == "published"
+        assert due_job.youtube_video_id == "YT_AUTO_123"
     finally:
-        engine.dispose()
-        os.unlink(tmp_db.name)
+        get_settings.cache_clear()
 
 
 def test_captcha_generation_verification_and_replay_protection():
@@ -352,11 +375,7 @@ def test_vercel_config_normalization(monkeypatch):
     assert s.GOOGLE_OAUTH_REDIRECT_URI == "https://campaign-intelligence.vercel.app/api/youtube/callback"
     assert "https://campaign-intelligence.vercel.app" in s.BACKEND_CORS_ORIGINS
 
-    monkeypatch.setenv("DATABASE_URL", "sqlite:///./campaign_intelligence.db")
-    monkeypatch.delenv("POSTGRES_URL", raising=False)
-    s_sqlite = Settings()
-    assert s_sqlite.DATABASE_URL == "sqlite:////tmp/campaign_intelligence.db"
-
+    monkeypatch.setenv("DATABASE_URL", "")
     monkeypatch.setenv("POSTGRES_URL", "postgres://user:pass@ep-vercel.neon.tech/neondb?sslmode=require")
     s_pg_fallback = Settings()
     assert s_pg_fallback.DATABASE_URL.startswith("postgresql+psycopg://user:pass@ep-vercel.neon.tech/")

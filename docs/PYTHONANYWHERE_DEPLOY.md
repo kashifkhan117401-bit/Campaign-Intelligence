@@ -17,7 +17,7 @@ bash scripts/pythonanywhere_setup.sh
 
 This automatically:
 - Creates `~/Campaign-Intelligence/backend/.venv` and installs `backend/requirements.txt` (including `a2wsgi`).
-- Generates a production `.env` with strong `SECRET_KEY`, `OAUTH_ENCRYPTION_KEY`, absolute SQLite & storage paths, and your `https://<YOUR_USERNAME>.pythonanywhere.com` URLs.
+- Generates a production `.env` with strong `SECRET_KEY`, `OAUTH_ENCRYPTION_KEY`, absolute storage paths, and your `https://<YOUR_USERNAME>.pythonanywhere.com` URLs (configure your PostgreSQL `DATABASE_URL` in `.env` before running migrations).
 - Runs `alembic upgrade head` to initialize the database.
 
 ---

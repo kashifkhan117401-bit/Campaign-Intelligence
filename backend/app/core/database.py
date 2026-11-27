@@ -1,9 +1,9 @@
-"""SQLAlchemy 2.0 database engine, session management, and Base declaration."""
+"""SQLAlchemy 2.0 PostgreSQL database engine, session management, and Base declaration."""
 from __future__ import annotations
 
 from typing import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -18,29 +18,20 @@ class Base(DeclarativeBase):
 def _build_engine() -> Engine:
     settings = get_settings()
     url = settings.DATABASE_URL
-    connect_args = {}
-    engine_kwargs = {"pool_pre_ping": True}
+    if not url.startswith("postgresql"):
+        raise RuntimeError(
+            "PostgreSQL is required. Set DATABASE_URL to your PostgreSQL connection string (e.g. Neon or Supabase)."
+        )
 
-    if url.startswith("sqlite"):
-        connect_args["check_same_thread"] = False
-    elif settings.is_vercel:
+    engine_kwargs: dict = {"pool_pre_ping": True}
+    if settings.is_vercel:
         # Serverless functions should not hold long-lived connection pools
         engine_kwargs["poolclass"] = NullPool
     else:
         engine_kwargs["pool_size"] = 10
         engine_kwargs["max_overflow"] = 20
 
-    engine = create_engine(url, connect_args=connect_args, **engine_kwargs)
-
-    if url.startswith("sqlite"):
-        @event.listens_for(engine, "connect")
-        def _set_sqlite_pragma(dbapi_conn, _connection_record):
-            cursor = dbapi_conn.cursor()
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.close()
-
-    return engine
+    return create_engine(url, **engine_kwargs)
 
 
 engine = _build_engine()

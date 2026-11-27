@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     OAUTH_ENCRYPTION_KEY: str = ""
     CRON_SECRET: str = ""
 
-    # Database
-    DATABASE_URL: str = "sqlite:///./campaign_intelligence.db"
+    # Database (PostgreSQL only)
+    DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/campaign_intelligence"
 
     # AI / LLM
     LLM_PROVIDER: str = "gemini"
@@ -94,7 +94,12 @@ class Settings(BaseSettings):
     def model_post_init(self, __context: Any) -> None:
         # Auto-pick Vercel Storage / Neon / Supabase Postgres env vars (including custom prefixes
         # like DATABASE_DATABASE_URL, DATABASE_POSTGRES_URL, STORAGE_URL, POSTGRES_PRISMA_URL)
-        if self.DATABASE_URL.startswith("sqlite:///./"):
+        is_default_or_empty = (
+            not self.DATABASE_URL.strip()
+            or self.DATABASE_URL == "postgresql+psycopg://postgres:postgres@localhost:5432/campaign_intelligence"
+            or not self.DATABASE_URL.startswith(("postgres://", "postgresql://", "postgresql+psycopg://"))
+        )
+        if is_default_or_empty:
             preferred_keys = (
                 "POSTGRES_URL",
                 "POSTGRES_URL_NON_POOLING",
@@ -133,8 +138,6 @@ class Settings(BaseSettings):
 
         # Vercel Serverless runs on a read-only filesystem except /tmp
         if self.is_vercel:
-            if self.DATABASE_URL.startswith("sqlite:///./"):
-                self.DATABASE_URL = "sqlite:////tmp/campaign_intelligence.db"
             if self.UPLOAD_DIR.startswith("./"):
                 self.UPLOAD_DIR = "/tmp/storage/uploads"
             if self.REPORTS_DIR.startswith("./"):

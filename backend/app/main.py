@@ -72,20 +72,18 @@ async def unhandled_exception_handler(_request: Request, exc: Exception):
 
 @app.get("/health", tags=["System"])
 def health_check():
-    is_sqlite = settings.DATABASE_URL.startswith("sqlite")
     db_env_keys = sorted(
         k
         for k, v in os.environ.items()
         if any(tok in k.upper() for tok in ("DATABASE", "POSTGRES", "NEON", "SUPABASE", "STORAGE"))
-        and (v or "").strip().startswith(("postgres://", "postgresql://", "postgresql+psycopg://", "sqlite:"))
+        and (v or "").strip().startswith(("postgres://", "postgresql://", "postgresql+psycopg://"))
     )
     return {
         "status": "ok",
         "service": settings.APP_NAME,
         "version": "1.0.0",
         "environment": settings.APP_ENV,
-        "database_backend": "sqlite" if is_sqlite else "postgresql",
-        "database_ephemeral": bool(settings.is_vercel and is_sqlite),
+        "database_backend": "postgresql",
         "detected_db_env_keys": db_env_keys,
     }
 

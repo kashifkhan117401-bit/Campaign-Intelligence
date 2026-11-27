@@ -15,7 +15,7 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BACKEND_DIR.parent
 
-# Ensure relative paths in .env (SQLite DB, storage dirs) resolve from project root
+# Ensure relative paths in .env (storage dirs) resolve from project root
 os.chdir(str(PROJECT_ROOT))
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))

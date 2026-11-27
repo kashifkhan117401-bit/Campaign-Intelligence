@@ -7,7 +7,6 @@ from fastapi import Cookie, Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, joinedload
 
-from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import decode_token
 from app.models.user import User
@@ -84,15 +83,6 @@ def get_current_user(
         .first()
     )
     if not user or not user.is_active:
-        settings = get_settings()
-        if not user and settings.is_vercel and settings.DATABASE_URL.startswith("sqlite"):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=(
-                    "Session not found because Vercel is using temporary /tmp SQLite storage. "
-                    "Set a persistent PostgreSQL DATABASE_URL (Neon or Supabase) in Vercel Environment Variables."
-                ),
-            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User account not found or deactivated.",
