@@ -1,7 +1,9 @@
 """FastAPI authentication and authorization dependencies."""
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, status
+from typing import Optional
+
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, joinedload
 
@@ -12,18 +14,54 @@ from app.models.user import User
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
+def _strip_bearer_prefix(raw_value: Optional[str]) -> Optional[str]:
+    if not raw_value:
+        return None
+    value = raw_value.strip()
+    if not value:
+        return None
+    if value.lower().startswith("bearer "):
+        token = value[7:].strip()
+        return token or None
+    return value
+
+
+def extract_bearer_token(
+    credentials: HTTPAuthorizationCredentials | None = None,
+    x_auth_token: Optional[str] = None,
+    x_authorization: Optional[str] = None,
+) -> Optional[str]:
+    """Extract JWT access token from Authorization header or proxy-safe fallback headers."""
+    if credentials and credentials.scheme.lower() == "bearer" and credentials.credentials:
+        token = credentials.credentials.strip()
+        if token:
+            return token
+    for fallback in (x_auth_token, x_authorization):
+        token = _strip_bearer_prefix(fallback)
+        if token:
+            return token
+    return None
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    x_auth_token: Optional[str] = Header(default=None, alias="X-Auth-Token"),
+    x_authorization: Optional[str] = Header(default=None, alias="X-Authorization"),
     db: Session = Depends(get_db),
 ) -> User:
-    if not credentials or credentials.scheme.lower() != "bearer":
+    token = extract_bearer_token(
+        credentials=credentials,
+        x_auth_token=x_auth_token,
+        x_authorization=x_authorization,
+    )
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required. Provide a valid Bearer access token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    payload = decode_token(credentials.credentials)
+    payload = decode_token(token)
     if not payload or payload.get("type") != "access":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

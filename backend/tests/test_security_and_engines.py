@@ -351,3 +351,15 @@ def test_vercel_config_normalization(monkeypatch):
     assert s.FRONTEND_URL == "https://campaign-intelligence.vercel.app"
     assert s.GOOGLE_OAUTH_REDIRECT_URI == "https://campaign-intelligence.vercel.app/api/youtube/callback"
     assert "https://campaign-intelligence.vercel.app" in s.BACKEND_CORS_ORIGINS
+
+
+def test_bearer_token_extraction_with_proxy_fallback_headers():
+    from fastapi.security import HTTPAuthorizationCredentials
+    from app.api.deps import extract_bearer_token
+
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="jwt-from-auth")
+    assert extract_bearer_token(credentials=creds) == "jwt-from-auth"
+    assert extract_bearer_token(credentials=None, x_auth_token="Bearer jwt-from-x-auth") == "jwt-from-x-auth"
+    assert extract_bearer_token(credentials=None, x_auth_token="raw-jwt-token") == "raw-jwt-token"
+    assert extract_bearer_token(credentials=None, x_authorization="Bearer jwt-from-x-authorization") == "jwt-from-x-authorization"
+    assert extract_bearer_token(credentials=None, x_auth_token=None, x_authorization=None) is None

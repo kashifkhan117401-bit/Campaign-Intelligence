@@ -46,10 +46,23 @@ export const api = axios.create({
   timeout: 60000,
 });
 
+function applyAuthHeaders(headers: InternalAxiosRequestConfig["headers"] | undefined, token: string) {
+  if (!headers) return;
+  const bearer = `Bearer ${token}`;
+  if (typeof (headers as { set?: (name: string, value: string) => void }).set === "function") {
+    (headers as { set: (name: string, value: string) => void }).set("Authorization", bearer);
+    // Custom fallback header survives reverse proxies (Vercel Services / Apache WSGI) that strip Authorization
+    (headers as { set: (name: string, value: string) => void }).set("X-Auth-Token", bearer);
+  } else {
+    (headers as Record<string, string>).Authorization = bearer;
+    (headers as Record<string, string>)["X-Auth-Token"] = bearer;
+  }
+}
+
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const { accessToken } = getStoredTokens();
   if (accessToken && config.headers) {
-    config.headers.Authorization = `Bearer ${accessToken}`;
+    applyAuthHeaders(config.headers, accessToken);
   }
   return config;
 });
@@ -65,6 +78,13 @@ function processQueue(error: unknown, token: string | null = null) {
   failedQueue = [];
 }
 
+function redirectToLoginIfNeeded() {
+  const path = window.location.pathname;
+  if (path !== "/login" && path !== "/register") {
+    window.location.href = "/login";
+  }
+}
+
 api.interceptors.response.use(
   (res) => res,
   async (error: AxiosError) => {
@@ -73,6 +93,7 @@ api.interceptors.response.use(
       const { refreshToken } = getStoredTokens();
       if (!refreshToken) {
         clearStoredTokens();
+        redirectToLoginIfNeeded();
         return Promise.reject(error);
       }
 
@@ -80,7 +101,7 @@ api.interceptors.response.use(
         return new Promise((resolve, reject) => {
           failedQueue.push({
             resolve: (newToken: string) => {
-              if (original.headers) original.headers.Authorization = `Bearer ${newToken}`;
+              applyAuthHeaders(original.headers, newToken);
               resolve(api(original));
             },
             reject,
@@ -97,12 +118,12 @@ api.interceptors.response.use(
         });
         setStoredTokens(resp.data.access_token, resp.data.refresh_token);
         processQueue(null, resp.data.access_token);
-        if (original.headers) original.headers.Authorization = `Bearer ${resp.data.access_token}`;
+        applyAuthHeaders(original.headers, resp.data.access_token);
         return api(original);
       } catch (refreshErr) {
         processQueue(refreshErr, null);
         clearStoredTokens();
-        window.location.href = "/login";
+        redirectToLoginIfNeeded();
         return Promise.reject(refreshErr);
       } finally {
         isRefreshing = false;

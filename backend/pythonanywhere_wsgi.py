@@ -32,4 +32,13 @@ _settings = get_settings()
 _settings.ensure_storage_dirs()
 Base.metadata.create_all(bind=engine)
 
-application = ASGIMiddleware(fastapi_app)
+_asgi_app = ASGIMiddleware(fastapi_app)
+
+
+def application(environ, start_response):
+    """WSGI wrapper that restores HTTP_AUTHORIZATION from X-Auth-Token if Apache strips it."""
+    if not environ.get("HTTP_AUTHORIZATION"):
+        fallback = environ.get("HTTP_X_AUTH_TOKEN") or environ.get("HTTP_X_AUTHORIZATION")
+        if fallback:
+            environ["HTTP_AUTHORIZATION"] = fallback if fallback.lower().startswith("bearer ") else f"Bearer {fallback}"
+    return _asgi_app(environ, start_response)
