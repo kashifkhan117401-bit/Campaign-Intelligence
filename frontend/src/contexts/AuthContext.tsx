@@ -1,5 +1,6 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { authApi, clearStoredTokens, getStoredTokens, setStoredTokens } from "../services/api";
+import { useToast } from "./ToastContext";
 import type { User } from "../types";
 
 interface AuthContextValue {
@@ -24,6 +25,8 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const { notify } = useToast();
+  const lastExpiredToastAt = useRef(0);
 
   const refreshUser = useCallback(async () => {
     try {
@@ -40,6 +43,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void refreshUser();
   }, [refreshUser]);
+
+  // Handle 401 session expiry purely client-side via React Router (never hard-reloading /login)
+  useEffect(() => {
+    const handleAuthExpired = (evt: Event) => {
+      clearStoredTokens();
+      setUser(null);
+      const now = Date.now();
+      if (now - lastExpiredToastAt.current > 3000) {
+        lastExpiredToastAt.current = now;
+        const msg = (evt as CustomEvent<{ message?: string }>).detail?.message || "Please sign in again.";
+        notify("error", "Session expired", msg);
+      }
+    };
+    window.addEventListener("ci:auth-expired", handleAuthExpired);
+    return () => window.removeEventListener("ci:auth-expired", handleAuthExpired);
+  }, [notify]);
 
   const login = useCallback(
     async (email: string, password: string, captcha?: { captcha_token: string; captcha_answer: string }) => {

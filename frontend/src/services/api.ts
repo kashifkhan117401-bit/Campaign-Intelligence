@@ -93,11 +93,15 @@ function processQueue(error: unknown, token: string | null = null) {
   failedQueue = [];
 }
 
-function redirectToLoginIfNeeded() {
-  const path = window.location.pathname;
-  if (path !== "/login" && path !== "/register" && path !== "/privacy" && path !== "/terms") {
-    window.location.href = "/login";
-  }
+function extractErrorDetail(err: unknown): string {
+  const axiosErr = err as AxiosError<{ detail?: string }>;
+  const detail = axiosErr?.response?.data?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  return "Your session expired. Please sign in again.";
+}
+
+function notifyAuthExpired(reason: string) {
+  window.dispatchEvent(new CustomEvent("ci:auth-expired", { detail: { message: reason } }));
 }
 
 type RetryableRequestConfig = InternalAxiosRequestConfig & {
@@ -110,6 +114,7 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const original = error.config as RetryableRequestConfig | undefined;
     if (error.response?.status === 401 && original && !original._retry && !isPublicAuthRequest(original.url)) {
+      const initialReason = extractErrorDetail(error);
       const { refreshToken } = getStoredTokens();
 
       if (isRefreshing) {
@@ -141,9 +146,9 @@ api.interceptors.response.use(
         processQueue(refreshErr, null);
         clearStoredTokens();
         if (!original._skipAuthRedirect) {
-          redirectToLoginIfNeeded();
+          notifyAuthExpired(initialReason);
         }
-        return Promise.reject(refreshErr);
+        return Promise.reject(error);
       } finally {
         isRefreshing = false;
       }

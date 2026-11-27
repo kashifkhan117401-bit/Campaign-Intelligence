@@ -13,7 +13,7 @@
   },
   "rewrites": [
     {
-      "source": "/api/:path*",
+      "source": "/api/(.*)",
       "destination": { "service": "backend" }
     },
     {
@@ -33,7 +33,7 @@
       "destination": { "service": "backend" }
     },
     {
-      "source": "/assets/:path*",
+      "source": "/assets/(.*)",
       "destination": { "service": "frontend" }
     },
     {
