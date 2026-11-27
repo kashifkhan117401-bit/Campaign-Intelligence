@@ -44,6 +44,7 @@ export function clearStoredTokens() {
 export const api = axios.create({
   baseURL: API_BASE,
   timeout: 60000,
+  withCredentials: true,
 });
 
 function applyAuthHeaders(headers: InternalAxiosRequestConfig["headers"] | undefined, token: string) {
@@ -57,6 +58,20 @@ function applyAuthHeaders(headers: InternalAxiosRequestConfig["headers"] | undef
     (headers as Record<string, string>).Authorization = bearer;
     (headers as Record<string, string>)["X-Auth-Token"] = bearer;
   }
+}
+
+const PUBLIC_AUTH_PATHS = [
+  "/auth/login",
+  "/auth/register",
+  "/auth/refresh",
+  "/auth/logout",
+  "/auth/captcha",
+  "/auth/password-reset",
+];
+
+function isPublicAuthRequest(url?: string): boolean {
+  if (!url) return false;
+  return PUBLIC_AUTH_PATHS.some((prefix) => url.includes(prefix));
 }
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
@@ -80,22 +95,22 @@ function processQueue(error: unknown, token: string | null = null) {
 
 function redirectToLoginIfNeeded() {
   const path = window.location.pathname;
-  if (path !== "/login" && path !== "/register") {
+  if (path !== "/login" && path !== "/register" && path !== "/privacy" && path !== "/terms") {
     window.location.href = "/login";
   }
 }
 
+type RetryableRequestConfig = InternalAxiosRequestConfig & {
+  _retry?: boolean;
+  _skipAuthRedirect?: boolean;
+};
+
 api.interceptors.response.use(
   (res) => res,
   async (error: AxiosError) => {
-    const original = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
-    if (error.response?.status === 401 && original && !original._retry && !original.url?.includes("/auth/")) {
+    const original = error.config as RetryableRequestConfig | undefined;
+    if (error.response?.status === 401 && original && !original._retry && !isPublicAuthRequest(original.url)) {
       const { refreshToken } = getStoredTokens();
-      if (!refreshToken) {
-        clearStoredTokens();
-        redirectToLoginIfNeeded();
-        return Promise.reject(error);
-      }
 
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
@@ -113,9 +128,11 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        const resp = await axios.post<TokenResponse>(`${API_BASE}/auth/refresh`, {
-          refresh_token: refreshToken,
-        });
+        const resp = await axios.post<TokenResponse>(
+          `${API_BASE}/auth/refresh`,
+          refreshToken ? { refresh_token: refreshToken } : {},
+          { withCredentials: true }
+        );
         setStoredTokens(resp.data.access_token, resp.data.refresh_token);
         processQueue(null, resp.data.access_token);
         applyAuthHeaders(original.headers, resp.data.access_token);
@@ -123,7 +140,9 @@ api.interceptors.response.use(
       } catch (refreshErr) {
         processQueue(refreshErr, null);
         clearStoredTokens();
-        redirectToLoginIfNeeded();
+        if (!original._skipAuthRedirect) {
+          redirectToLoginIfNeeded();
+        }
         return Promise.reject(refreshErr);
       } finally {
         isRefreshing = false;
@@ -156,7 +175,10 @@ export const authApi = {
   }) => api.post<TokenResponse>("/auth/login", payload).then((r) => r.data),
   logout: (refresh_token?: string | null) =>
     api.post("/auth/logout", { refresh_token }).then((r) => r.data),
-  me: () => api.get<User>("/auth/me").then((r) => r.data),
+  me: (opts?: { skipRedirect?: boolean }) =>
+    api
+      .get<User>("/auth/me", { _skipAuthRedirect: opts?.skipRedirect } as Record<string, unknown>)
+      .then((r) => r.data),
   updateProfile: (payload: Partial<UserProfile>) =>
     api.put<UserProfile>("/auth/profile", payload).then((r) => r.data),
   updateSettings: (payload: Partial<UserSettings>) =>

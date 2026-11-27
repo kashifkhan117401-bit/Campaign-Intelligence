@@ -3,13 +3,17 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Cookie, Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import decode_token
 from app.models.user import User
+
+ACCESS_COOKIE_NAME = "ci_access_token"
+REFRESH_COOKIE_NAME = "ci_refresh_token"
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -30,13 +34,14 @@ def extract_bearer_token(
     credentials: HTTPAuthorizationCredentials | None = None,
     x_auth_token: Optional[str] = None,
     x_authorization: Optional[str] = None,
+    cookie_token: Optional[str] = None,
 ) -> Optional[str]:
-    """Extract JWT access token from Authorization header or proxy-safe fallback headers."""
+    """Extract JWT access token from Authorization header, fallback headers, or HttpOnly cookie."""
     if credentials and credentials.scheme.lower() == "bearer" and credentials.credentials:
         token = credentials.credentials.strip()
         if token:
             return token
-    for fallback in (x_auth_token, x_authorization):
+    for fallback in (x_auth_token, x_authorization, cookie_token):
         token = _strip_bearer_prefix(fallback)
         if token:
             return token
@@ -47,12 +52,14 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     x_auth_token: Optional[str] = Header(default=None, alias="X-Auth-Token"),
     x_authorization: Optional[str] = Header(default=None, alias="X-Authorization"),
+    cookie_token: Optional[str] = Cookie(default=None, alias=ACCESS_COOKIE_NAME),
     db: Session = Depends(get_db),
 ) -> User:
     token = extract_bearer_token(
         credentials=credentials,
         x_auth_token=x_auth_token,
         x_authorization=x_authorization,
+        cookie_token=cookie_token,
     )
     if not token:
         raise HTTPException(
@@ -77,6 +84,15 @@ def get_current_user(
         .first()
     )
     if not user or not user.is_active:
+        settings = get_settings()
+        if not user and settings.is_vercel and settings.DATABASE_URL.startswith("sqlite"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    "Session not found because Vercel is using temporary /tmp SQLite storage. "
+                    "Set a persistent PostgreSQL DATABASE_URL (Neon or Supabase) in Vercel Environment Variables."
+                ),
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User account not found or deactivated.",

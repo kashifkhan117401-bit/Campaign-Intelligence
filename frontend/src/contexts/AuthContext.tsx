@@ -26,14 +26,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const refreshUser = useCallback(async () => {
-    const { accessToken } = getStoredTokens();
-    if (!accessToken) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
     try {
-      const me = await authApi.me();
+      const me = await authApi.me({ skipRedirect: true });
       setUser(me);
     } catch {
       clearStoredTokens();

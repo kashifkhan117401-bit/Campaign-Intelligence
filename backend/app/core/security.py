@@ -9,13 +9,11 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+import bcrypt
 from cryptography.fernet import Fernet, InvalidToken
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import get_settings
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Patterns commonly used in prompt injection inside untrusted comments
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -23,12 +21,23 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 
+def _password_bytes(password: str) -> bytes:
+    """Encode password as UTF-8, bounded to bcrypt's 72-byte input limit."""
+    return password.encode("utf-8")[:72]
+
+
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    salt = bcrypt.gensalt(rounds=12)
+    return bcrypt.hashpw(_password_bytes(password), salt).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    if not plain_password or not hashed_password:
+        return False
+    try:
+        return bcrypt.checkpw(_password_bytes(plain_password), hashed_password.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 def hash_token(token: str) -> str:

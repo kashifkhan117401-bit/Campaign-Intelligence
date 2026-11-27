@@ -27,6 +27,7 @@ export function AuthPage({ initialMode = "login" }: { initialMode?: AuthMode }) 
   const [captchaImg, setCaptchaImg] = useState("");
   const [captchaAnswer, setCaptchaAnswer] = useState("");
   const [loadingCaptcha, setLoadingCaptcha] = useState(false);
+  const [captchaError, setCaptchaError] = useState<string | null>(null);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [legalDoc, setLegalDoc] = useState<LegalDocType | null>(null);
 
@@ -36,13 +37,15 @@ export function AuthPage({ initialMode = "login" }: { initialMode?: AuthMode }) 
 
   const loadCaptcha = useCallback(async () => {
     setLoadingCaptcha(true);
+    setCaptchaError(null);
     try {
       const res = await authApi.captcha();
       setCaptchaToken(res.captcha_token);
       setCaptchaImg(res.image_data_url);
       setCaptchaAnswer("");
-    } catch {
-      // Handled gracefully if backend is momentarily unreachable
+    } catch (err) {
+      setCaptchaImg("");
+      setCaptchaError(getApiErrorMessage(err));
     } finally {
       setLoadingCaptcha(false);
     }
@@ -339,6 +342,14 @@ export function AuthPage({ initialMode = "login" }: { initialMode?: AuthMode }) 
                           className="h-full w-full select-none object-contain"
                           draggable={false}
                         />
+                      ) : captchaError ? (
+                        <button
+                          type="button"
+                          onClick={() => void loadCaptcha()}
+                          className="px-2 text-center text-[11px] font-medium text-rose-300 hover:text-rose-200"
+                        >
+                          Failed to load — tap to retry
+                        </button>
                       ) : (
                         <span className="text-[11px] text-slate-400">Loading...</span>
                       )}

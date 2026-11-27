@@ -6,10 +6,10 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Cookie, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.deps import get_current_user
+from app.api.deps import ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME, get_current_user
 from app.core.captcha import generate_captcha_challenge, verify_captcha_challenge
 from app.core.config import get_settings
 from app.core.database import get_db
@@ -50,7 +50,36 @@ from app.services.video_processor import is_ffmpeg_available
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-def _issue_tokens(db: Session, user: User) -> TokenResponse:
+def _set_auth_cookies(response: Response, tokens: TokenResponse) -> None:
+    """Persist tokens in HttpOnly cookies as a proxy-proof fallback alongside Bearer headers."""
+    settings = get_settings()
+    secure_cookie = settings.is_vercel or settings.APP_ENV.lower() == "production" or settings.FRONTEND_URL.startswith("https://")
+    response.set_cookie(
+        key=ACCESS_COOKIE_NAME,
+        value=tokens.access_token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite="lax",
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=tokens.refresh_token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite="lax",
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        path="/",
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    response.delete_cookie(key=ACCESS_COOKIE_NAME, path="/")
+    response.delete_cookie(key=REFRESH_COOKIE_NAME, path="/")
+
+
+def _issue_tokens(db: Session, user: User, response: Response | None = None) -> TokenResponse:
     settings = get_settings()
     access_token = create_access_token(subject=user.id, role=user.role)
     refresh_token, expires_at = create_refresh_token(subject=user.id)
@@ -70,12 +99,15 @@ def _issue_tokens(db: Session, user: User) -> TokenResponse:
         .filter(User.id == user.id)
         .first()
     )
-    return TokenResponse(
+    token_resp = TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         user=UserResponse.model_validate(hydrated),
     )
+    if response is not None:
+        _set_auth_cookies(response, token_resp)
+    return token_resp
 
 
 @router.get("/captcha", response_model=CaptchaResponse)
@@ -89,7 +121,7 @@ def get_captcha():
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+def register(payload: RegisterRequest, response: Response, db: Session = Depends(get_db)):
     settings = get_settings()
     if not payload.accepted_terms:
         raise HTTPException(
@@ -127,11 +159,11 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     )
     db.add(UserSettings(user_id=user.id))
     db.commit()
-    return _issue_tokens(db, user)
+    return _issue_tokens(db, user, response=response)
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
     settings = get_settings()
     if settings.CAPTCHA_ENABLED:
         ok, err = verify_captcha_challenge(payload.captcha_token, payload.captcha_answer)
@@ -150,16 +182,25 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is deactivated.",
         )
-    return _issue_tokens(db, user)
+    return _issue_tokens(db, user, response=response)
 
 
 @router.post("/refresh", response_model=TokenResponse)
-def refresh_tokens(payload: RefreshRequest, db: Session = Depends(get_db)):
-    decoded = decode_token(payload.refresh_token)
+def refresh_tokens(
+    response: Response,
+    payload: RefreshRequest | None = Body(default=None),
+    cookie_refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE_NAME),
+    db: Session = Depends(get_db),
+):
+    raw_refresh = (payload.refresh_token if payload else None) or cookie_refresh_token
+    if not raw_refresh:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token.")
+
+    decoded = decode_token(raw_refresh)
     if not decoded or decoded.get("type") != "refresh":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token.")
 
-    t_hash = hash_token(payload.refresh_token)
+    t_hash = hash_token(raw_refresh)
     stored = (
         db.query(RefreshToken)
         .filter(RefreshToken.token_hash == t_hash, RefreshToken.revoked.is_(False))
@@ -184,29 +225,24 @@ def refresh_tokens(payload: RefreshRequest, db: Session = Depends(get_db)):
     # Rotate refresh token
     stored.revoked = True
     db.commit()
-    return _issue_tokens(db, user)
+    return _issue_tokens(db, user, response=response)
 
 
 @router.post("/logout")
 def logout(
-    payload: LogoutRequest,
-    current_user: User = Depends(get_current_user),
+    response: Response,
+    payload: LogoutRequest | None = Body(default=None),
+    cookie_refresh_token: str | None = Cookie(default=None, alias=REFRESH_COOKIE_NAME),
     db: Session = Depends(get_db),
 ):
-    if payload.refresh_token:
-        t_hash = hash_token(payload.refresh_token)
-        stored = (
-            db.query(RefreshToken)
-            .filter(RefreshToken.token_hash == t_hash, RefreshToken.user_id == current_user.id)
-            .first()
-        )
+    raw_refresh = (payload.refresh_token if payload else None) or cookie_refresh_token
+    if raw_refresh:
+        t_hash = hash_token(raw_refresh)
+        stored = db.query(RefreshToken).filter(RefreshToken.token_hash == t_hash).first()
         if stored:
             stored.revoked = True
-    else:
-        db.query(RefreshToken).filter(
-            RefreshToken.user_id == current_user.id, RefreshToken.revoked.is_(False)
-        ).update({"revoked": True})
-    db.commit()
+            db.commit()
+    _clear_auth_cookies(response)
     return {"message": "Logged out successfully."}
 
 

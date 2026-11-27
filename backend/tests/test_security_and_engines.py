@@ -366,4 +366,20 @@ def test_bearer_token_extraction_with_proxy_fallback_headers():
     assert extract_bearer_token(credentials=None, x_auth_token="Bearer jwt-from-x-auth") == "jwt-from-x-auth"
     assert extract_bearer_token(credentials=None, x_auth_token="raw-jwt-token") == "raw-jwt-token"
     assert extract_bearer_token(credentials=None, x_authorization="Bearer jwt-from-x-authorization") == "jwt-from-x-authorization"
-    assert extract_bearer_token(credentials=None, x_auth_token=None, x_authorization=None) is None
+    assert extract_bearer_token(credentials=None, cookie_token="jwt-from-cookie") == "jwt-from-cookie"
+    assert extract_bearer_token(credentials=None, x_auth_token=None, x_authorization=None, cookie_token=None) is None
+
+
+def test_direct_bcrypt_password_hashing_and_long_passwords():
+    from app.core.security import hash_password, verify_password
+
+    hashed = hash_password("CampaignIntel#2026!")
+    assert hashed.startswith("$2b$")
+    assert verify_password("CampaignIntel#2026!", hashed) is True
+    assert verify_password("WrongPassword!", hashed) is False
+    assert verify_password("anything", "not-a-valid-hash") is False
+
+    # Passwords longer than bcrypt's 72-byte limit should not crash
+    long_pw = "A" * 100
+    long_hash = hash_password(long_pw)
+    assert verify_password(long_pw, long_hash) is True

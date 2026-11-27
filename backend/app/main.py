@@ -71,11 +71,14 @@ async def unhandled_exception_handler(_request: Request, exc: Exception):
 
 @app.get("/health", tags=["System"])
 def health_check():
+    is_sqlite = settings.DATABASE_URL.startswith("sqlite")
     return {
         "status": "ok",
         "service": settings.APP_NAME,
         "version": "1.0.0",
         "environment": settings.APP_ENV,
+        "database_backend": "sqlite" if is_sqlite else "postgresql",
+        "database_ephemeral": bool(settings.is_vercel and is_sqlite),
     }
 
 
