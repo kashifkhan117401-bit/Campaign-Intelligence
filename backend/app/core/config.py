@@ -92,13 +92,38 @@ class Settings(BaseSettings):
         return ["http://localhost:5173"]
 
     def model_post_init(self, __context: Any) -> None:
-        # Auto-pick Vercel Storage / Neon / Supabase Postgres env vars when DATABASE_URL is still default SQLite
+        # Auto-pick Vercel Storage / Neon / Supabase Postgres env vars (including custom prefixes
+        # like DATABASE_DATABASE_URL, DATABASE_POSTGRES_URL, STORAGE_URL, POSTGRES_PRISMA_URL)
         if self.DATABASE_URL.startswith("sqlite:///./"):
-            for env_key in ("POSTGRES_URL", "POSTGRES_URL_NON_POOLING", "NEON_DATABASE_URL", "SUPABASE_DB_URL"):
+            preferred_keys = (
+                "POSTGRES_URL",
+                "POSTGRES_URL_NON_POOLING",
+                "POSTGRES_PRISMA_URL",
+                "DATABASE_POSTGRES_URL",
+                "DATABASE_DATABASE_URL",
+                "DATABASE_URL_UNPOOLED",
+                "STORAGE_URL",
+                "STORAGE_DATABASE_URL",
+                "STORAGE_POSTGRES_URL",
+                "NEON_DATABASE_URL",
+                "SUPABASE_DB_URL",
+            )
+            found = ""
+            for env_key in preferred_keys:
                 candidate = (os.environ.get(env_key) or "").strip()
-                if candidate:
-                    self.DATABASE_URL = candidate
+                if candidate.startswith(("postgres://", "postgresql://", "postgresql+psycopg://")):
+                    found = candidate
                     break
+            if not found:
+                for env_key, raw_val in sorted(os.environ.items()):
+                    upper = env_key.upper()
+                    if any(tok in upper for tok in ("DATABASE", "POSTGRES", "NEON", "SUPABASE", "STORAGE")):
+                        candidate = (raw_val or "").strip()
+                        if candidate.startswith(("postgres://", "postgresql://", "postgresql+psycopg://")):
+                            found = candidate
+                            break
+            if found:
+                self.DATABASE_URL = found
 
         # Normalize Postgres URLs from Neon/Supabase/Vercel Postgres for SQLAlchemy + psycopg v3
         if self.DATABASE_URL.startswith("postgres://"):

@@ -361,6 +361,11 @@ def test_vercel_config_normalization(monkeypatch):
     s_pg_fallback = Settings()
     assert s_pg_fallback.DATABASE_URL.startswith("postgresql+psycopg://user:pass@ep-vercel.neon.tech/")
 
+    monkeypatch.delenv("POSTGRES_URL", raising=False)
+    monkeypatch.setenv("CUSTOM_STORAGE_URL", "postgresql://u:p@ep-custom.neon.tech/neondb?sslmode=require")
+    s_custom_prefix = Settings()
+    assert s_custom_prefix.DATABASE_URL.startswith("postgresql+psycopg://u:p@ep-custom.neon.tech/")
+
 
 def test_bearer_token_extraction_with_proxy_fallback_headers():
     from fastapi.security import HTTPAuthorizationCredentials
