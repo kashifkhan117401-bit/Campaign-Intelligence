@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     CRON_SECRET: str = ""
 
     # Database
-    DATABASE_URL: str = "sqlite:///./tubemind.db"
+    DATABASE_URL: str = "sqlite:///./campaign_intelligence.db"
 
     # AI / LLM
     LLM_PROVIDER: str = "gemini"
@@ -100,8 +100,8 @@ class Settings(BaseSettings):
 
         # Vercel Serverless runs on a read-only filesystem except /tmp
         if self.is_vercel:
-            if self.DATABASE_URL == "sqlite:///./tubemind.db":
-                self.DATABASE_URL = "sqlite:////tmp/tubemind.db"
+            if self.DATABASE_URL.startswith("sqlite:///./"):
+                self.DATABASE_URL = "sqlite:////tmp/campaign_intelligence.db"
             if self.UPLOAD_DIR.startswith("./"):
                 self.UPLOAD_DIR = "/tmp/storage/uploads"
             if self.REPORTS_DIR.startswith("./"):

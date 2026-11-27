@@ -352,6 +352,10 @@ def test_vercel_config_normalization(monkeypatch):
     assert s.GOOGLE_OAUTH_REDIRECT_URI == "https://campaign-intelligence.vercel.app/api/youtube/callback"
     assert "https://campaign-intelligence.vercel.app" in s.BACKEND_CORS_ORIGINS
 
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./campaign_intelligence.db")
+    s_sqlite = Settings()
+    assert s_sqlite.DATABASE_URL == "sqlite:////tmp/campaign_intelligence.db"
+
 
 def test_bearer_token_extraction_with_proxy_fallback_headers():
     from fastapi.security import HTTPAuthorizationCredentials

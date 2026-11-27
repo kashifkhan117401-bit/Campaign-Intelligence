@@ -5,8 +5,8 @@ import os
 import tempfile
 
 # Configure isolated test environment BEFORE importing app modules
-_tmp_dir = tempfile.mkdtemp(prefix="tubemind_test_")
-os.environ["DATABASE_URL"] = f"sqlite:///{_tmp_dir}/test_tubemind.db"
+_tmp_dir = tempfile.mkdtemp(prefix="campaign_intelligence_test_")
+os.environ["DATABASE_URL"] = f"sqlite:///{_tmp_dir}/test_campaign_intelligence.db"
 os.environ["UPLOAD_DIR"] = os.path.join(_tmp_dir, "uploads")
 os.environ["REPORTS_DIR"] = os.path.join(_tmp_dir, "reports")
 os.environ["FRAMES_DIR"] = os.path.join(_tmp_dir, "frames")
