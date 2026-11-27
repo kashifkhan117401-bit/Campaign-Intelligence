@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,6 +41,7 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     CAPTCHA_ENABLED: bool = True
     OAUTH_ENCRYPTION_KEY: str = ""
+    CRON_SECRET: str = ""
 
     # Database
     DATABASE_URL: str = "sqlite:///./tubemind.db"
@@ -88,6 +90,42 @@ class Settings(BaseSettings):
         if isinstance(v, list):
             return [str(o) for o in v]
         return ["http://localhost:5173"]
+
+    def model_post_init(self, __context: Any) -> None:
+        # Normalize Postgres URLs from Neon/Supabase/Vercel Postgres for SQLAlchemy + psycopg v3
+        if self.DATABASE_URL.startswith("postgres://"):
+            self.DATABASE_URL = "postgresql+psycopg://" + self.DATABASE_URL[len("postgres://") :]
+        elif self.DATABASE_URL.startswith("postgresql://"):
+            self.DATABASE_URL = "postgresql+psycopg://" + self.DATABASE_URL[len("postgresql://") :]
+
+        # Vercel Serverless runs on a read-only filesystem except /tmp
+        if self.is_vercel:
+            if self.DATABASE_URL == "sqlite:///./tubemind.db":
+                self.DATABASE_URL = "sqlite:////tmp/tubemind.db"
+            if self.UPLOAD_DIR.startswith("./"):
+                self.UPLOAD_DIR = "/tmp/storage/uploads"
+            if self.REPORTS_DIR.startswith("./"):
+                self.REPORTS_DIR = "/tmp/storage/reports"
+            if self.FRAMES_DIR.startswith("./"):
+                self.FRAMES_DIR = "/tmp/storage/frames"
+
+            vercel_host = (
+                os.environ.get("VERCEL_PROJECT_PRODUCTION_URL")
+                or os.environ.get("VERCEL_URL")
+                or ""
+            ).strip()
+            if vercel_host:
+                vercel_origin = vercel_host if vercel_host.startswith("http") else f"https://{vercel_host}"
+                if "localhost" in self.FRONTEND_URL:
+                    self.FRONTEND_URL = vercel_origin
+                if vercel_origin not in self.BACKEND_CORS_ORIGINS:
+                    self.BACKEND_CORS_ORIGINS = [*self.BACKEND_CORS_ORIGINS, vercel_origin]
+                if "localhost" in self.GOOGLE_OAUTH_REDIRECT_URI:
+                    self.GOOGLE_OAUTH_REDIRECT_URI = f"{vercel_origin}/api/youtube/callback"
+
+    @property
+    def is_vercel(self) -> bool:
+        return bool(os.environ.get("VERCEL"))
 
     @property
     def has_gemini_key(self) -> bool:

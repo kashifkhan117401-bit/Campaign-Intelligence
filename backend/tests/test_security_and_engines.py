@@ -331,3 +331,23 @@ def test_captcha_generation_verification_and_replay_protection():
     code2 = "".join(re.findall(r">([A-Z0-9])</text>", svg_xml2))
     ok_valid, _ = verify_captcha_challenge(token2, code2.lower())
     assert ok_valid is True
+
+
+def test_vercel_config_normalization(monkeypatch):
+    from app.core.config import Settings
+
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("VERCEL_PROJECT_PRODUCTION_URL", "campaign-intelligence.vercel.app")
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@ep-demo.neon.tech/neondb?sslmode=require")
+    monkeypatch.delenv("FRONTEND_URL", raising=False)
+    monkeypatch.delenv("GOOGLE_OAUTH_REDIRECT_URI", raising=False)
+    monkeypatch.delenv("UPLOAD_DIR", raising=False)
+    s = Settings()
+    assert s.is_vercel is True
+    assert s.DATABASE_URL.startswith("postgresql+psycopg://user:pass@ep-demo.neon.tech/")
+    assert s.UPLOAD_DIR == "/tmp/storage/uploads"
+    assert s.REPORTS_DIR == "/tmp/storage/reports"
+    assert s.FRAMES_DIR == "/tmp/storage/frames"
+    assert s.FRONTEND_URL == "https://campaign-intelligence.vercel.app"
+    assert s.GOOGLE_OAUTH_REDIRECT_URI == "https://campaign-intelligence.vercel.app/api/youtube/callback"
+    assert "https://campaign-intelligence.vercel.app" in s.BACKEND_CORS_ORIGINS

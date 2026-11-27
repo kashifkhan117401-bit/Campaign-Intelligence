@@ -6,6 +6,7 @@ from typing import Generator
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 
@@ -22,6 +23,9 @@ def _build_engine() -> Engine:
 
     if url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
+    elif settings.is_vercel:
+        # Serverless functions should not hold long-lived connection pools
+        engine_kwargs["poolclass"] = NullPool
     else:
         engine_kwargs["pool_size"] = 10
         engine_kwargs["max_overflow"] = 20

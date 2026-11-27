@@ -78,11 +78,15 @@ def start_youtube_analysis(
     db.add(analysis)
     db.commit()
 
-    background_tasks.add_task(
-        run_youtube_analysis_task,
-        analysis.id,
-        payload.use_demo_fallback,
-    )
+    if settings.is_vercel:
+        # Serverless functions freeze immediately after returning a response, so run inline
+        run_youtube_analysis_task(analysis.id, payload.use_demo_fallback)
+    else:
+        background_tasks.add_task(
+            run_youtube_analysis_task,
+            analysis.id,
+            payload.use_demo_fallback,
+        )
 
     hydrated = (
         db.query(VideoAnalysis)

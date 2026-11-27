@@ -27,10 +27,12 @@ logger = logging.getLogger(__name__)
 async def lifespan(_app: FastAPI):
     settings.ensure_storage_dirs()
     Base.metadata.create_all(bind=engine)
-    upload_scheduler.start()
-    logger.info("Campaign Intelligence backend started (env=%s)", settings.APP_ENV)
+    if not settings.is_vercel:
+        upload_scheduler.start()
+    logger.info("Campaign Intelligence backend started (env=%s, vercel=%s)", settings.APP_ENV, settings.is_vercel)
     yield
-    await upload_scheduler.stop()
+    if not settings.is_vercel:
+        await upload_scheduler.stop()
     logger.info("Campaign Intelligence backend shutting down.")
 
 
@@ -87,9 +89,9 @@ app.include_router(ads.router, prefix=prefix)
 app.include_router(reports.router, prefix=prefix)
 app.include_router(dashboard.router, prefix=prefix)
 
-# Serve built React SPA when frontend/dist exists (single-origin production deploy, e.g. PythonAnywhere)
+# Serve built React SPA when frontend/dist exists (single-origin non-Vercel deploy, e.g. PythonAnywhere)
 _FRONTEND_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"
-if (_FRONTEND_DIST / "index.html").is_file():
+if not settings.is_vercel and (_FRONTEND_DIST / "index.html").is_file():
     _ASSETS_DIR = _FRONTEND_DIST / "assets"
     if _ASSETS_DIR.is_dir():
         app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="frontend-assets")

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
@@ -29,7 +29,7 @@ from app.schemas.video import (
     RescheduleJobRequest,
     YouTubePublishRequest,
 )
-from app.services.upload_scheduler import as_utc
+from app.services.upload_scheduler import as_utc, process_due_scheduled_uploads
 from app.tasks.analysis_tasks import run_youtube_publish_task
 
 logger = logging.getLogger(__name__)
@@ -266,8 +266,27 @@ def publish_video(
     db.refresh(job)
 
     if not is_delayed_schedule:
-        background_tasks.add_task(run_youtube_publish_task, job.id)
+        if get_settings().is_vercel:
+            run_youtube_publish_task(job.id)
+        else:
+            background_tasks.add_task(run_youtube_publish_task, job.id)
     return PublishingJobResponse.model_validate(job)
+
+
+@router.get("/cron/process-scheduled")
+def cron_process_scheduled_uploads(authorization: Optional[str] = Header(default=None)):
+    """Trigger due scheduled YouTube uploads (for Vercel Cron or external schedulers)."""
+    settings = get_settings()
+    if settings.CRON_SECRET:
+        expected = f"Bearer {settings.CRON_SECRET}"
+        if authorization != expected:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized cron invocation.")
+
+    def _run_sync(job_id: str) -> None:
+        run_youtube_publish_task(job_id, is_scheduled_auto_upload=True)
+
+    processed = process_due_scheduled_uploads(dispatch_fn=_run_sync)
+    return {"processed_count": len(processed), "job_ids": processed}
 
 
 @router.patch("/jobs/{job_id}/schedule", response_model=PublishingJobResponse)

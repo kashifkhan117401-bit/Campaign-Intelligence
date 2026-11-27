@@ -18,6 +18,7 @@ node_modules/
 frontend/dist/
 frontend/dist.zip
 frontend/.vite/
+*.zip
 
 # Local uploaded media & generated reports
 storage/
