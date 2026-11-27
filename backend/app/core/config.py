@@ -92,6 +92,14 @@ class Settings(BaseSettings):
         return ["http://localhost:5173"]
 
     def model_post_init(self, __context: Any) -> None:
+        # Auto-pick Vercel Storage / Neon / Supabase Postgres env vars when DATABASE_URL is still default SQLite
+        if self.DATABASE_URL.startswith("sqlite:///./"):
+            for env_key in ("POSTGRES_URL", "POSTGRES_URL_NON_POOLING", "NEON_DATABASE_URL", "SUPABASE_DB_URL"):
+                candidate = (os.environ.get(env_key) or "").strip()
+                if candidate:
+                    self.DATABASE_URL = candidate
+                    break
+
         # Normalize Postgres URLs from Neon/Supabase/Vercel Postgres for SQLAlchemy + psycopg v3
         if self.DATABASE_URL.startswith("postgres://"):
             self.DATABASE_URL = "postgresql+psycopg://" + self.DATABASE_URL[len("postgres://") :]

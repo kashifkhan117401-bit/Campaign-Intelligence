@@ -353,8 +353,13 @@ def test_vercel_config_normalization(monkeypatch):
     assert "https://campaign-intelligence.vercel.app" in s.BACKEND_CORS_ORIGINS
 
     monkeypatch.setenv("DATABASE_URL", "sqlite:///./campaign_intelligence.db")
+    monkeypatch.delenv("POSTGRES_URL", raising=False)
     s_sqlite = Settings()
     assert s_sqlite.DATABASE_URL == "sqlite:////tmp/campaign_intelligence.db"
+
+    monkeypatch.setenv("POSTGRES_URL", "postgres://user:pass@ep-vercel.neon.tech/neondb?sslmode=require")
+    s_pg_fallback = Settings()
+    assert s_pg_fallback.DATABASE_URL.startswith("postgresql+psycopg://user:pass@ep-vercel.neon.tech/")
 
 
 def test_bearer_token_extraction_with_proxy_fallback_headers():
