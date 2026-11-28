@@ -234,19 +234,74 @@ export const contentApi = {
 
 // --- Video Studio & YouTube Publishing ---
 export const videoApi = {
-  upload: (file: File, onProgress?: (pct: number) => void) => {
-    const form = new FormData();
-    form.append("file", file);
-    return api
-      .post<UploadedMedia>("/videos/upload", form, {
-        headers: { "Content-Type": "multipart/form-data" },
-        onUploadProgress: (evt) => {
-          if (evt.total && onProgress) {
-            onProgress(Math.round((evt.loaded / evt.total) * 100));
-          }
-        },
+  upload: async (file: File, onProgress?: (pct: number) => void): Promise<UploadedMedia> => {
+    const session = await api
+      .post<{
+        mode: "neon_function" | "direct";
+        upload_url?: string;
+        upload_token?: string;
+        object_key?: string;
+        stored_filename?: string;
+        original_filename?: string;
+        mime_type?: string;
+      }>("/videos/upload-session", {
+        filename: file.name,
+        content_type: file.type || "video/mp4",
+        file_size_bytes: file.size,
       })
       .then((r) => r.data);
+
+    const form = new FormData();
+    form.append("file", file);
+
+    if (session.mode === "neon_function" && session.upload_url && session.upload_token && session.object_key) {
+      const uploaded = await axios
+        .post<{ ok: boolean; object_key: string; file_size_bytes: number; content_type: string }>(
+          session.upload_url,
+          form,
+          {
+            timeout: 300000,
+            headers: { "X-Upload-Token": session.upload_token },
+            onUploadProgress: (evt) => {
+              if (evt.total && onProgress) {
+                onProgress(Math.round((evt.loaded / evt.total) * 100));
+              }
+            },
+          }
+        )
+        .then((r) => r.data);
+
+      return api
+        .post<UploadedMedia>("/videos/complete-upload", {
+          object_key: uploaded.object_key,
+          stored_filename: session.stored_filename || file.name,
+          original_filename: session.original_filename || file.name,
+          mime_type: uploaded.content_type || session.mime_type || file.type || "video/mp4",
+          file_size_bytes: uploaded.file_size_bytes || file.size,
+        })
+        .then((r) => r.data);
+    }
+
+    try {
+      return await api
+        .post<UploadedMedia>("/videos/upload", form, {
+          headers: { "Content-Type": "multipart/form-data" },
+          onUploadProgress: (evt) => {
+            if (evt.total && onProgress) {
+              onProgress(Math.round((evt.loaded / evt.total) * 100));
+            }
+          },
+        })
+        .then((r) => r.data);
+    } catch (err) {
+      const status = (err as AxiosError)?.response?.status;
+      if (status === 413) {
+        throw new Error(
+          "Video exceeds Vercel's 4.5 MB direct limit. Add NEON_BRANCH_ID, NEON_FUNCTION_HOST_SUFFIX, and NEON_REALTIME_SECRET to Vercel Environment Variables to enable direct Neon Object Storage uploads."
+        );
+      }
+      throw err;
+    }
   },
   list: () => api.get<UploadedMedia[]>("/videos").then((r) => r.data),
   get: (videoId: string) => api.get<UploadedMedia>(`/videos/${videoId}`).then((r) => r.data),

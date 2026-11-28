@@ -13,6 +13,9 @@ export default defineConfig({
     },
   },
   auth: true,
+  buckets: {
+    videos: {},
+  },
   functions: {
     hello: {
       name: "Campaign Intelligence Neon Service",

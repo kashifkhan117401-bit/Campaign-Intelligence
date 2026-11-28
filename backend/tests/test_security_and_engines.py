@@ -246,6 +246,7 @@ def test_naive_datetime_normalization_and_scheduled_upload_dispatch(monkeypatch)
         id="media-1",
         user_id="user-1",
         original_filename="clip.mp4",
+        stored_filename="clip.mp4",
         file_path=__file__,
         mime_type="video/mp4",
     )

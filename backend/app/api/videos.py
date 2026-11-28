@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from pydantic import BaseModel, Field
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,13 @@ from app.schemas.video import (
     UploadedMediaResponse,
     VideoAnalyzeRequest,
 )
+from app.services.neon_storage import (
+    NEON_S3_PREFIX,
+    can_use_neon_storage_upload,
+    delete_remote_video_object,
+    ensure_local_video_file,
+    mint_upload_token,
+)
 from app.services.video_processor import (
     ALLOWED_VIDEO_MIME_TYPES,
     analyze_uploaded_video_content,
@@ -33,6 +41,85 @@ from app.services.video_processor import (
 )
 
 router = APIRouter(prefix="/videos", tags=["Video Publishing Studio"])
+
+
+class UploadSessionRequest(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=255)
+    content_type: str = Field(default="video/mp4", max_length=120)
+    file_size_bytes: int = Field(default=0, ge=0)
+
+
+class CompleteUploadRequest(BaseModel):
+    object_key: str = Field(..., min_length=1, max_length=400)
+    stored_filename: str = Field(..., min_length=1, max_length=255)
+    original_filename: str = Field(..., min_length=1, max_length=255)
+    mime_type: str = Field(default="video/mp4", max_length=120)
+    file_size_bytes: int = Field(default=0, ge=0)
+
+
+@router.post("/upload-session")
+def create_upload_session(
+    payload: UploadSessionRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Return a Neon Function direct upload grant when configured (bypasses Vercel's 4.5 MB body cap)."""
+    settings = get_settings()
+    mime = (payload.content_type or "video/mp4").lower()
+    if mime not in ALLOWED_VIDEO_MIME_TYPES and not mime.startswith("video/"):
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported MIME type '{mime}'. Please upload a valid video file (MP4, MOV, WebM, MKV, AVI).",
+        )
+    max_bytes = settings.MAX_VIDEO_UPLOAD_MB * 1024 * 1024
+    if payload.file_size_bytes > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds maximum allowed size of {settings.MAX_VIDEO_UPLOAD_MB} MB.",
+        )
+
+    fn_url = settings.neon_function_url("hello")
+    if can_use_neon_storage_upload() and fn_url:
+        safe_name = sanitize_filename(payload.filename)
+        stored_filename = f"{current_user.id}_{uuid.uuid4().hex[:12]}_{safe_name}"
+        object_key = f"{current_user.id}/{stored_filename}"
+        upload_token = mint_upload_token(current_user.id, object_key)
+        return {
+            "mode": "neon_function",
+            "upload_url": f"{fn_url}/storage/upload",
+            "upload_token": upload_token,
+            "object_key": object_key,
+            "stored_filename": stored_filename,
+            "original_filename": safe_name,
+            "mime_type": mime,
+        }
+
+    return {"mode": "direct"}
+
+
+@router.post("/complete-upload", response_model=UploadedMediaResponse, status_code=status.HTTP_201_CREATED)
+def complete_remote_upload(
+    payload: CompleteUploadRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Register a video uploaded directly to Neon Object Storage in Lakebase Postgres."""
+    expected_prefix = f"{current_user.id}/"
+    if not payload.object_key.startswith(expected_prefix):
+        raise HTTPException(status_code=403, detail="Invalid object key for current user.")
+
+    media = UploadedMedia(
+        user_id=current_user.id,
+        original_filename=sanitize_filename(payload.original_filename),
+        stored_filename=sanitize_filename(payload.stored_filename),
+        file_path=f"{NEON_S3_PREFIX}{payload.object_key}",
+        mime_type=(payload.mime_type or "video/mp4").lower(),
+        file_size_bytes=payload.file_size_bytes,
+        analysis_status="uploaded",
+    )
+    db.add(media)
+    db.commit()
+    db.refresh(media)
+    return UploadedMediaResponse.model_validate(media)
 
 
 @router.post("/upload", response_model=UploadedMediaResponse, status_code=status.HTTP_201_CREATED)
@@ -130,14 +217,18 @@ def analyze_video(
     )
     if not media:
         raise HTTPException(status_code=404, detail="Uploaded video not found.")
-    if not os.path.exists(media.file_path):
+    try:
+        local_video_path = ensure_local_video_file(media.file_path, media.stored_filename)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"Could not retrieve video from storage: {exc}")
+    if not os.path.exists(local_video_path):
         raise HTTPException(status_code=404, detail="Video file is no longer available on server storage.")
 
     media.analysis_status = "analyzing"
     db.commit()
 
-    frames = sample_representative_frames(media.file_path, media.id, media.duration_seconds)
-    transcript_text, segments, is_fallback = transcribe_video_audio(media.file_path, media.id)
+    frames = sample_representative_frames(local_video_path, media.id, media.duration_seconds)
+    transcript_text, segments, is_fallback = transcribe_video_audio(local_video_path, media.id)
     meta_dict = {
         "duration_seconds": media.duration_seconds,
         "width": media.width,
@@ -222,9 +313,16 @@ def generate_metadata(
 
 def _cleanup_media_files(media: UploadedMedia) -> None:
     settings = get_settings()
+    delete_remote_video_object(media.file_path)
     if media.file_path and os.path.exists(media.file_path):
         try:
             os.unlink(media.file_path)
+        except OSError:
+            pass
+    local_cached = Path(settings.UPLOAD_DIR) / media.stored_filename
+    if local_cached.exists():
+        try:
+            local_cached.unlink()
         except OSError:
             pass
     frames_dir = Path(settings.FRAMES_DIR) / media.id

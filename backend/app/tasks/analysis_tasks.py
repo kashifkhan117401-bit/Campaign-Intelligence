@@ -33,6 +33,7 @@ from app.models.analysis import (
 from app.models.content import PublishingJob, UploadedMedia
 from app.models.reporting import APIUsageLog, CampaignRecord
 from app.models.user import ConnectedYouTubeChannel
+from app.services.neon_storage import ensure_local_video_file
 
 logger = logging.getLogger(__name__)
 
@@ -357,9 +358,11 @@ def run_youtube_publish_task(job_id: str, is_scheduled_auto_upload: bool = False
             else sched_utc
         )
 
+        local_video_path = ensure_local_video_file(media.file_path, media.stored_filename)
+
         api_resp = upload_video_to_youtube(
             access_token=access_token,
-            file_path=media.file_path,
+            file_path=local_video_path,
             mime_type=media.mime_type,
             title=job.title,
             description=job.description,

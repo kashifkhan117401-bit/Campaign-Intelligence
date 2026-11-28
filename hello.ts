@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { Pool } from "pg";
@@ -14,6 +15,12 @@ const connectionString = (process.env.DATABASE_URL || "").replace(
 // Module-scope pg Pool reused across requests on the same Neon Function isolate
 const pool = new Pool({ connectionString, max: 5 });
 attachDatabasePool(pool);
+
+// Neon Object Storage S3 client (reads AWS_* env vars injected automatically by Neon)
+const VIDEOS_BUCKET = "videos";
+const s3 = process.env.AWS_ENDPOINT_URL_S3
+  ? new S3Client({ forcePathStyle: true })
+  : null;
 
 function getDbNameFromUrl(rawUrl: string): string {
   try {
@@ -64,16 +71,32 @@ async function verifyNeonAuthBearer(authHeader: string | undefined): Promise<{ s
   }
 }
 
-function verifyServerSealSignature(userId: string, signatureHex: string | undefined): boolean {
-  if (!realtimeSecret || !userId || !signatureHex) return false;
-  const expected = crypto
-    .createHmac("sha256", realtimeSecret)
-    .update(`seal:${userId}`)
-    .digest("hex");
+function verifyServerHmac(message: string, signatureHex: string | undefined): boolean {
+  if (!realtimeSecret || !message || !signatureHex) return false;
+  const expected = crypto.createHmac("sha256", realtimeSecret).update(message).digest("hex");
   const actualBuf = Buffer.from(signatureHex.trim(), "utf8");
   const expectedBuf = Buffer.from(expected, "utf8");
   if (actualBuf.length !== expectedBuf.length) return false;
   return crypto.timingSafeEqual(actualBuf, expectedBuf);
+}
+
+function verifyUploadToken(token: string | undefined): { user_id: string; object_key: string } | null {
+  if (!token || !realtimeSecret || !token.includes(".")) return null;
+  const [payloadB64, sigHex] = token.split(".", 2);
+  if (!payloadB64 || !sigHex) return null;
+  if (!verifyServerHmac(`upload:${payloadB64}`, sigHex)) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf-8")) as {
+      user_id?: string;
+      object_key?: string;
+      exp?: number;
+    };
+    if (!decoded.user_id || !decoded.object_key) return null;
+    if (decoded.exp && Date.now() / 1000 > decoded.exp) return null;
+    return { user_id: decoded.user_id, object_key: decoded.object_key };
+  } catch {
+    return null;
+  }
 }
 
 const app = new Hono();
@@ -82,8 +105,8 @@ app.use(
   "*",
   cors({
     origin: "*",
-    allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Authorization", "Content-Type", "X-Server-Signature"],
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowHeaders: ["Authorization", "Content-Type", "X-Server-Signature", "X-Upload-Token"],
   })
 );
 
@@ -105,6 +128,7 @@ app.get("/", async (c) => {
       services: {
         postgres: Boolean(process.env.DATABASE_URL),
         auth: Boolean(authJwksUrl),
+        storage: Boolean(s3),
         realtime: Boolean(realtime),
       },
     });
@@ -120,6 +144,88 @@ app.get("/auth/verify", async (c) => {
     return c.json({ authenticated: false, detail: "Missing or invalid Neon Auth Bearer token." }, 401);
   }
   return c.json({ authenticated: true, user: identity });
+});
+
+app.post("/storage/upload", async (c) => {
+  if (!s3) {
+    return c.json({ detail: "Neon Object Storage is not configured on this branch." }, 503);
+  }
+  const grant = verifyUploadToken(c.req.header("x-upload-token"));
+  if (!grant) {
+    return c.json({ detail: "Invalid or expired upload token." }, 401);
+  }
+
+  const form = await c.req.formData();
+  const file = form.get("file");
+  if (!file || typeof file === "string") {
+    return c.json({ detail: "Missing video file in multipart upload." }, 400);
+  }
+
+  const contentType = file.type || "video/mp4";
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes.byteLength === 0) {
+    return c.json({ detail: "Uploaded video file is empty." }, 400);
+  }
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: VIDEOS_BUCKET,
+      Key: grant.object_key,
+      Body: bytes,
+      ContentType: contentType,
+    })
+  );
+
+  return c.json(
+    {
+      ok: true,
+      object_key: grant.object_key,
+      file_size_bytes: bytes.byteLength,
+      content_type: contentType,
+    },
+    201
+  );
+});
+
+app.get("/storage/download", async (c) => {
+  if (!s3) {
+    return c.json({ detail: "Neon Object Storage is not configured." }, 503);
+  }
+  const key = c.req.query("key") || "";
+  if (!key || !verifyServerHmac(`download:${key}`, c.req.header("x-server-signature"))) {
+    return c.json({ detail: "Unauthorized storage download request." }, 401);
+  }
+
+  try {
+    const obj = await s3.send(new GetObjectCommand({ Bucket: VIDEOS_BUCKET, Key: key }));
+    const body = obj.Body ? await obj.Body.transformToByteArray() : new Uint8Array();
+    return new Response(body, {
+      status: 200,
+      headers: {
+        "Content-Type": obj.ContentType || "application/octet-stream",
+        "Content-Length": String(body.byteLength),
+      },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ detail: `Object not found: ${msg}` }, 404);
+  }
+});
+
+app.delete("/storage/object", async (c) => {
+  if (!s3) {
+    return c.json({ ok: true });
+  }
+  const key = c.req.query("key") || "";
+  if (!key || !verifyServerHmac(`delete:${key}`, c.req.header("x-server-signature"))) {
+    return c.json({ detail: "Unauthorized storage delete request." }, 401);
+  }
+  try {
+    await s3.send(new DeleteObjectCommand({ Bucket: VIDEOS_BUCKET, Key: key }));
+  } catch {
+    // Ignore missing object on cleanup
+  }
+  return c.json({ ok: true });
 });
 
 app.post("/realtime/seal", async (c) => {
@@ -139,7 +245,7 @@ app.post("/realtime/seal", async (c) => {
   const neonIdentity = await verifyNeonAuthBearer(c.req.header("authorization"));
   if (neonIdentity) {
     authorizedUserId = neonIdentity.sub;
-  } else if (body.user_id && verifyServerSealSignature(body.user_id, c.req.header("x-server-signature"))) {
+  } else if (body.user_id && verifyServerHmac(`seal:${body.user_id}`, c.req.header("x-server-signature"))) {
     authorizedUserId = body.user_id;
   }
 
