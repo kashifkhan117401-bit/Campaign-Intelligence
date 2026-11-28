@@ -75,7 +75,7 @@ def youtube_oauth_callback(
     if error:
         logger.warning("YouTube OAuth callback returned error: %s", error)
         qs = urlencode({"oauth_error": error})
-        return RedirectResponse(url=f"{settings.FRONTEND_URL}/video-studio?{qs}")
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/#/video-studio?{qs}")
     if not code or not state:
         raise HTTPException(status_code=400, detail="Missing OAuth code or state parameter.")
 
@@ -83,7 +83,7 @@ def youtube_oauth_callback(
     if not decoded or decoded.get("role") != "oauth_state":
         logger.warning("YouTube OAuth callback received invalid or expired state token.")
         qs = urlencode({"oauth_error": "invalid_state", "oauth_detail": "OAuth session expired. Please click Connect YouTube Channel again."})
-        return RedirectResponse(url=f"{settings.FRONTEND_URL}/video-studio?{qs}")
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/#/video-studio?{qs}")
     user_id = decoded.get("sub")
 
     try:
@@ -92,7 +92,7 @@ def youtube_oauth_callback(
     except YouTubeOAuthError as exc:
         logger.warning("YouTube OAuth callback failed (%s): %s", exc.code, exc.message)
         qs = urlencode({"oauth_error": exc.code, "oauth_detail": exc.message})
-        return RedirectResponse(url=f"{settings.FRONTEND_URL}/video-studio?{qs}")
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/#/video-studio?{qs}")
 
     existing = (
         db.query(ConnectedYouTubeChannel)
@@ -129,7 +129,7 @@ def youtube_oauth_callback(
             )
         )
     db.commit()
-    return RedirectResponse(url=f"{settings.FRONTEND_URL}/video-studio?oauth_connected=true")
+    return RedirectResponse(url=f"{settings.FRONTEND_URL}/#/video-studio?oauth_connected=true")
 
 
 @router.get("/channels", response_model=List[ConnectedChannelResponse])
