@@ -1,8 +1,10 @@
 import React from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { RealtimeProvider } from "@neon/realtime-react";
 import { Loader2 } from "lucide-react";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ToastProvider } from "./contexts/ToastContext";
+import { neonRealtimeClient } from "./lib/neon";
 import { DashboardLayout } from "./layouts/DashboardLayout";
 import { AuthPage } from "./pages/AuthPage";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -37,7 +39,7 @@ function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
 }
 
 export function App() {
-  return (
+  const tree = (
     <ToastProvider>
       <AuthProvider>
         <BrowserRouter>
@@ -87,6 +89,8 @@ export function App() {
       </AuthProvider>
     </ToastProvider>
   );
+
+  return neonRealtimeClient ? <RealtimeProvider client={neonRealtimeClient}>{tree}</RealtimeProvider> : tree;
 }
 
 export default App;

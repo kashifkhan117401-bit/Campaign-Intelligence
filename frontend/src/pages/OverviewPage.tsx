@@ -26,6 +26,7 @@ import {
 import { dashboardApi } from "../services/api";
 import type { CampaignRecord, DashboardOverview } from "../types";
 import { EmptyState, SkeletonCard, StatCard } from "../components/UI";
+import { NeonRealtimeActivityBadge } from "../components/NeonRealtimeActivity";
 import { formatDate, formatNumber, getApiErrorMessage } from "../utils/format";
 import { useToast } from "../contexts/ToastContext";
 
@@ -72,7 +73,10 @@ export function OverviewPage() {
       {/* Header & Quick Actions */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Intelligence Overview</h1>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="text-2xl font-bold tracking-tight text-white">Intelligence Overview</h1>
+            <NeonRealtimeActivityBadge />
+          </div>
           <p className="mt-1 text-sm text-slate-400">
             Real-time YouTube audience sentiment, content automation, and campaign performance.
           </p>

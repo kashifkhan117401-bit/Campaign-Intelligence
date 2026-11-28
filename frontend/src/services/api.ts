@@ -364,3 +364,23 @@ export const dashboardApi = {
       params: record_type ? { record_type } : undefined,
     }),
 };
+
+// --- Neon Services (Postgres, Auth, AI Gateway, Functions, Realtime) ---
+export const neonApi = {
+  config: () =>
+    api
+      .get<{
+        branch: string | null;
+        branch_id: string | null;
+        auth_url: string | null;
+        realtime_url: string | null;
+        function_hello_url: string | null;
+        services: Record<string, boolean>;
+      }>("/neon/config")
+      .then((r) => r.data),
+  status: () => api.get<Record<string, unknown>>("/neon/status").then((r) => r.data),
+  sealActivityQuery: () =>
+    api
+      .post<{ realtime_url: string | null; sealed_query: unknown }>("/neon/realtime/seal")
+      .then((r) => r.data),
+};

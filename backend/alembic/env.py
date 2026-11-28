@@ -12,7 +12,9 @@ import app.models  # noqa: F401 - register all ORM models
 
 config = context.config
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Neon best practice: run Alembic migrations over the direct (unpooled) connection string
+migration_url = settings.DATABASE_URL_UNPOOLED or settings.DATABASE_URL
+config.set_main_option("sqlalchemy.url", migration_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

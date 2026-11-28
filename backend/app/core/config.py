@@ -43,8 +43,18 @@ class Settings(BaseSettings):
     OAUTH_ENCRYPTION_KEY: str = ""
     CRON_SECRET: str = ""
 
-    # Database (PostgreSQL only)
+    # Database (PostgreSQL only — pooled for app traffic, unpooled for migrations)
     DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/campaign_intelligence"
+    DATABASE_URL_UNPOOLED: str = ""
+
+    # Neon Branch & Free Cloud Primitives (Postgres, Auth, Functions, Realtime)
+    NEON_BRANCH: str = ""
+    NEON_BRANCH_ID: str = ""
+    NEON_AUTH_BASE_URL: str = ""
+    NEON_AUTH_JWKS_URL: str = ""
+    NEON_FUNCTION_HOST_SUFFIX: str = ""
+    NEON_REALTIME_URL: str = ""
+    NEON_REALTIME_SECRET: str = ""
 
     # AI / LLM
     LLM_PROVIDER: str = "gemini"
@@ -136,6 +146,11 @@ class Settings(BaseSettings):
         elif self.DATABASE_URL.startswith("postgresql://"):
             self.DATABASE_URL = "postgresql+psycopg://" + self.DATABASE_URL[len("postgresql://") :]
 
+        if self.DATABASE_URL_UNPOOLED.startswith("postgres://"):
+            self.DATABASE_URL_UNPOOLED = "postgresql+psycopg://" + self.DATABASE_URL_UNPOOLED[len("postgres://") :]
+        elif self.DATABASE_URL_UNPOOLED.startswith("postgresql://"):
+            self.DATABASE_URL_UNPOOLED = "postgresql+psycopg://" + self.DATABASE_URL_UNPOOLED[len("postgresql://") :]
+
         # Vercel Serverless runs on a read-only filesystem except /tmp
         if self.is_vercel:
             if self.UPLOAD_DIR.startswith("./"):
@@ -184,6 +199,26 @@ class Settings(BaseSettings):
         if provider in ("openai", "openai_compatible", "custom"):
             return self.has_openai_key
         return self.has_gemini_key
+
+    @property
+    def has_neon_auth(self) -> bool:
+        return bool(self.NEON_AUTH_BASE_URL.strip() and (self.NEON_AUTH_JWKS_URL.strip() or self.NEON_AUTH_BASE_URL.strip()))
+
+    @property
+    def has_neon_functions(self) -> bool:
+        return bool(self.NEON_BRANCH_ID.strip() and self.NEON_FUNCTION_HOST_SUFFIX.strip())
+
+    @property
+    def has_neon_realtime(self) -> bool:
+        return bool(self.NEON_REALTIME_URL.strip() and self.NEON_REALTIME_SECRET.strip())
+
+    def neon_function_url(self, slug: str) -> Optional[str]:
+        if not self.has_neon_functions:
+            return None
+        suffix = self.NEON_FUNCTION_HOST_SUFFIX.strip()
+        if not suffix.startswith("."):
+            suffix = f".{suffix}"
+        return f"https://{self.NEON_BRANCH_ID.strip()}-{slug}{suffix}"
 
     @property
     def has_youtube_api_key(self) -> bool:

@@ -29,3 +29,4 @@ backend/storage/
 Thumbs.db
 .vscode/
 .idea/
+.neon

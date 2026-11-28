@@ -8,8 +8,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
-from app.core.security import decode_token
-from app.models.user import User
+from app.core.neon_auth import verify_neon_auth_jwt
+from app.core.security import decode_token, generate_secure_token, hash_password
+from app.models.user import User, UserProfile, UserSettings
 
 ACCESS_COOKIE_NAME = "ci_access_token"
 REFRESH_COOKIE_NAME = "ci_refresh_token"
@@ -68,20 +69,59 @@ def get_current_user(
         )
 
     payload = decode_token(token)
-    if not payload or payload.get("type") != "access":
+    if payload and payload.get("type") == "access":
+        user_id = payload.get("sub")
+        user = (
+            db.query(User)
+            .options(joinedload(User.profile), joinedload(User.settings))
+            .filter(User.id == user_id)
+            .first()
+        )
+        if not user or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User account not found or deactivated.",
+            )
+        return user
+
+    # Fallback: verify Neon Managed Better Auth EdDSA JWT via NEON_AUTH_JWKS_URL
+    neon_payload = verify_neon_auth_jwt(token)
+    if not neon_payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired access token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user_id = payload.get("sub")
+    neon_sub = str(neon_payload["sub"])
+    neon_email = str(neon_payload.get("email") or f"{neon_sub}@neon-auth.local").lower().strip()
+    neon_name = str(neon_payload.get("name") or neon_email.split("@")[0].title())
+
     user = (
         db.query(User)
         .options(joinedload(User.profile), joinedload(User.settings))
-        .filter(User.id == user_id)
+        .filter((User.id == neon_sub) | (User.email == neon_email))
         .first()
     )
+    if not user:
+        user = User(
+            id=neon_sub[:36],
+            email=neon_email,
+            hashed_password=hash_password(generate_secure_token(24)),
+            role="user",
+            is_active=True,
+        )
+        db.add(user)
+        db.flush()
+        db.add(UserProfile(user_id=user.id, full_name=neon_name, onboarding_completed=False))
+        db.add(UserSettings(user_id=user.id))
+        db.commit()
+        user = (
+            db.query(User)
+            .options(joinedload(User.profile), joinedload(User.settings))
+            .filter(User.id == user.id)
+            .first()
+        )
     if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.models  # noqa: F401 - register all SQLAlchemy models
-from app.api import ads, analyze, auth, content, dashboard, reports, videos, youtube
+from app.api import ads, analyze, auth, content, dashboard, neon, reports, videos, youtube
 from app.core.config import get_settings
 from app.core.database import Base, engine
 from app.core.logging_config import configure_logging
@@ -97,6 +97,7 @@ app.include_router(youtube.router, prefix=prefix)
 app.include_router(ads.router, prefix=prefix)
 app.include_router(reports.router, prefix=prefix)
 app.include_router(dashboard.router, prefix=prefix)
+app.include_router(neon.router, prefix=prefix)
 
 # Serve built React SPA when frontend/dist exists (single-origin non-Vercel deploy, e.g. PythonAnywhere)
 _FRONTEND_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"

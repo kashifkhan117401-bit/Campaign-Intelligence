@@ -10,6 +10,9 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@neon/auth": "^0.8.2",
+    "@neon/realtime": "^0.2.2",
+    "@neon/realtime-react": "^0.2.0",
     "axios": "^1.7.7",
     "framer-motion": "^11.11.17",
     "lucide-react": "^0.454.0",
