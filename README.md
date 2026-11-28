@@ -1,7 +1,7 @@
 # Campaign Intelligence — Audience & YouTube Marketing Intelligence Platform ( version 2.0 )
 
 Campaign Intelligence (*"Know Pakistan's audience before you spend a rupee."*) is a full-stack, production-oriented AI SaaS platform built with **React + TypeScript + Vite + Tailwind CSS** on the frontend, **FastAPI + SQLAlchemy 2.0 + Alembic + PostgreSQL** on the backend, **Google Gemini API** (with optional OpenAI fallback) for reasoning, embeddings, and audio transcription, **YouTube Data API v3 + OAuth 2.0** for live comment collection and confirmed video publishing, **FFmpeg** for video metadata and keyframe extraction, and **ReportLab** for 18-section executive PDF reports. 
-
+ 
 --- 
 
 ## Key Capabilities 
