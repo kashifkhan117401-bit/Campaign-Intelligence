@@ -102,6 +102,23 @@ class Settings(BaseSettings):
         return ["http://localhost:5173"]
 
     def model_post_init(self, __context: Any) -> None:
+        # Strip accidental surrounding quotes/whitespace pasted into hosting dashboards (e.g. Vercel UI)
+        for attr in (
+            "NEON_BRANCH",
+            "NEON_BRANCH_ID",
+            "NEON_AUTH_BASE_URL",
+            "NEON_AUTH_JWKS_URL",
+            "NEON_FUNCTION_HOST_SUFFIX",
+            "NEON_REALTIME_URL",
+            "NEON_REALTIME_SECRET",
+            "DATABASE_URL",
+            "DATABASE_URL_UNPOOLED",
+        ):
+            val = getattr(self, attr, "")
+            if isinstance(val, str):
+                cleaned = val.strip().strip('"').strip("'").strip()
+                setattr(self, attr, cleaned)
+
         # Auto-pick Vercel Storage / Neon / Supabase Postgres env vars (including custom prefixes
         # like DATABASE_DATABASE_URL, DATABASE_POSTGRES_URL, STORAGE_URL, POSTGRES_PRISMA_URL)
         is_default_or_empty = (

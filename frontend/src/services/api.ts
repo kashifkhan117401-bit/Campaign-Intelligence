@@ -255,29 +255,123 @@ export const videoApi = {
     form.append("file", file);
 
     if (session.mode === "neon_function" && session.upload_url && session.upload_token && session.object_key) {
-      const uploaded = await axios
-        .post<{ ok: boolean; object_key: string; file_size_bytes: number; content_type: string }>(
-          session.upload_url,
-          form,
-          {
-            timeout: 300000,
-            headers: { "X-Upload-Token": session.upload_token },
-            onUploadProgress: (evt) => {
-              if (evt.total && onProgress) {
-                onProgress(Math.round((evt.loaded / evt.total) * 100));
+      const fnBase = session.upload_url.replace(/\/storage\/upload$/, "");
+      const contentType = session.mime_type || file.type || "video/mp4";
+      const MULTIPART_THRESHOLD = 5 * 1024 * 1024; // 5 MiB (S3 multipart minimum part size)
+      const CHUNK_SIZE = 6 * 1024 * 1024; // 6 MiB chunks — safe on every proxy & browser
+
+      if (file.size <= MULTIPART_THRESHOLD) {
+        await axios.put(session.upload_url, file, {
+          timeout: 180000,
+          headers: {
+            "X-Upload-Token": session.upload_token,
+            "Content-Type": contentType,
+          },
+          onUploadProgress: (evt) => {
+            if (evt.total && onProgress) {
+              onProgress(Math.round((evt.loaded / evt.total) * 100));
+            }
+          },
+        });
+      } else {
+        const started = await axios
+          .post<{ upload_id: string }>(
+            `${fnBase}/storage/multipart/start`,
+            { content_type: contentType },
+            {
+              timeout: 30000,
+              headers: { "X-Upload-Token": session.upload_token },
+            }
+          )
+          .then((r) => r.data);
+
+        const uploadId = started.upload_id;
+        const totalParts = Math.ceil(file.size / CHUNK_SIZE);
+        const parts: Array<{ part_number: number; etag: string }> = [];
+        let uploadedBytes = 0;
+
+        try {
+          for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+            const start = (partNumber - 1) * CHUNK_SIZE;
+            const end = Math.min(start + CHUNK_SIZE, file.size);
+            const blob = file.slice(start, end);
+
+            let partResp: { part_number: number; etag: string } | null = null;
+            let lastErr: unknown = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                partResp = await axios
+                  .put<{ part_number: number; etag: string }>(
+                    `${fnBase}/storage/multipart/part`,
+                    blob,
+                    {
+                      params: { uploadId, partNumber },
+                      timeout: 120000,
+                      headers: {
+                        "X-Upload-Token": session.upload_token,
+                        "Content-Type": "application/octet-stream",
+                      },
+                      onUploadProgress: (evt) => {
+                        if (onProgress) {
+                          const pct = Math.min(
+                            99,
+                            Math.round(((uploadedBytes + (evt.loaded || 0)) / file.size) * 100)
+                          );
+                          onProgress(pct);
+                        }
+                      },
+                    }
+                  )
+                  .then((r) => r.data);
+                break;
+              } catch (err) {
+                lastErr = err;
+                if (attempt < 2) {
+                  await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+                }
               }
-            },
+            }
+            if (!partResp) throw lastErr;
+            parts.push(partResp);
+            uploadedBytes += end - start;
+            if (onProgress) {
+              onProgress(Math.min(99, Math.round((uploadedBytes / file.size) * 100)));
+            }
           }
-        )
-        .then((r) => r.data);
+
+          await axios.post(
+            `${fnBase}/storage/multipart/complete`,
+            {
+              upload_id: uploadId,
+              parts,
+              file_size_bytes: file.size,
+              content_type: contentType,
+            },
+            {
+              timeout: 60000,
+              headers: { "X-Upload-Token": session.upload_token },
+            }
+          );
+          if (onProgress) onProgress(100);
+        } catch (err) {
+          axios
+            .post(
+              `${fnBase}/storage/multipart/abort`,
+              { upload_id: uploadId },
+              { headers: { "X-Upload-Token": session.upload_token } }
+            )
+            .catch(() => {});
+          throw err;
+        }
+      }
 
       return api
         .post<UploadedMedia>("/videos/complete-upload", {
-          object_key: uploaded.object_key,
+          object_key: session.object_key,
           stored_filename: session.stored_filename || file.name,
           original_filename: session.original_filename || file.name,
-          mime_type: uploaded.content_type || session.mime_type || file.type || "video/mp4",
-          file_size_bytes: uploaded.file_size_bytes || file.size,
+          mime_type: contentType,
+          file_size_bytes: file.size,
         })
         .then((r) => r.data);
     }

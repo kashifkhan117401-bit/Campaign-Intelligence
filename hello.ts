@@ -1,5 +1,14 @@
 import crypto from "node:crypto";
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+  UploadPartCommand,
+} from "@aws-sdk/client-s3";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { Pool } from "pg";
@@ -32,8 +41,12 @@ function getDbNameFromUrl(rawUrl: string): string {
 }
 
 const dbName = getDbNameFromUrl(process.env.DATABASE_URL || "");
-const realtimeSecret = process.env.NEON_REALTIME_SECRET || process.env.REALTIME_SECRET || "";
-const realtimeUrl = process.env.NEON_REALTIME_URL || process.env.REALTIME_URL || "";
+const realtimeSecret = (process.env.NEON_REALTIME_SECRET || process.env.REALTIME_SECRET || "")
+  .trim()
+  .replace(/^["']|["']$/g, "");
+const realtimeUrl = (process.env.NEON_REALTIME_URL || process.env.REALTIME_URL || "")
+  .trim()
+  .replace(/^["']|["']$/g, "");
 const realtime = realtimeSecret
   ? createRealtime({ secret: realtimeSecret, db: dbName })
   : null;
@@ -99,16 +112,27 @@ function verifyUploadToken(token: string | undefined): { user_id: string; object
   }
 }
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Server-Signature, X-Upload-Token",
+};
+
 const app = new Hono();
 
 app.use(
   "*",
   cors({
     origin: "*",
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type", "X-Server-Signature", "X-Upload-Token"],
   })
 );
+
+app.onError((err, c) => {
+  const message = err instanceof Error ? err.message : String(err);
+  return c.json({ detail: `Neon Function error: ${message}` }, 500, CORS_HEADERS);
+});
 
 app.get("/", async (c) => {
   try {
@@ -146,7 +170,8 @@ app.get("/auth/verify", async (c) => {
   return c.json({ authenticated: true, user: identity });
 });
 
-app.post("/storage/upload", async (c) => {
+// Single-shot upload for smaller files (supports both raw binary PUT and multipart POST)
+async function handleSingleUpload(c: any) {
   if (!s3) {
     return c.json({ detail: "Neon Object Storage is not configured on this branch." }, 503);
   }
@@ -155,14 +180,21 @@ app.post("/storage/upload", async (c) => {
     return c.json({ detail: "Invalid or expired upload token." }, 401);
   }
 
-  const form = await c.req.formData();
-  const file = form.get("file");
-  if (!file || typeof file === "string") {
-    return c.json({ detail: "Missing video file in multipart upload." }, 400);
+  let bytes: Uint8Array;
+  let contentType = c.req.header("content-type") || "video/mp4";
+
+  if (contentType.includes("multipart/form-data")) {
+    const form = await c.req.formData();
+    const file = form.get("file");
+    if (!file || typeof file === "string") {
+      return c.json({ detail: "Missing video file in multipart upload." }, 400);
+    }
+    contentType = file.type || "video/mp4";
+    bytes = new Uint8Array(await file.arrayBuffer());
+  } else {
+    bytes = new Uint8Array(await c.req.arrayBuffer());
   }
 
-  const contentType = file.type || "video/mp4";
-  const bytes = new Uint8Array(await file.arrayBuffer());
   if (bytes.byteLength === 0) {
     return c.json({ detail: "Uploaded video file is empty." }, 400);
   }
@@ -185,6 +217,133 @@ app.post("/storage/upload", async (c) => {
     },
     201
   );
+}
+
+app.post("/storage/upload", handleSingleUpload);
+app.put("/storage/upload", handleSingleUpload);
+
+// S3 Multipart Upload endpoints for large videos (6 MiB chunks — works up to 500 MB+ with low memory)
+app.post("/storage/multipart/start", async (c) => {
+  if (!s3) {
+    return c.json({ detail: "Neon Object Storage is not configured on this branch." }, 503);
+  }
+  const grant = verifyUploadToken(c.req.header("x-upload-token"));
+  if (!grant) {
+    return c.json({ detail: "Invalid or expired upload token." }, 401);
+  }
+  let contentType = "video/mp4";
+  try {
+    const body = await c.req.json<{ content_type?: string }>();
+    if (body?.content_type) contentType = body.content_type;
+  } catch {
+    // default video/mp4
+  }
+
+  const created = await s3.send(
+    new CreateMultipartUploadCommand({
+      Bucket: VIDEOS_BUCKET,
+      Key: grant.object_key,
+      ContentType: contentType,
+    })
+  );
+  if (!created.UploadId) {
+    return c.json({ detail: "Failed to initiate multipart upload in Neon Object Storage." }, 502);
+  }
+  return c.json({ upload_id: created.UploadId, object_key: grant.object_key }, 201);
+});
+
+app.put("/storage/multipart/part", async (c) => {
+  if (!s3) {
+    return c.json({ detail: "Neon Object Storage is not configured." }, 503);
+  }
+  const grant = verifyUploadToken(c.req.header("x-upload-token"));
+  if (!grant) {
+    return c.json({ detail: "Invalid or expired upload token." }, 401);
+  }
+  const uploadId = c.req.query("uploadId") || "";
+  const partNumber = Number(c.req.query("partNumber") || "0");
+  if (!uploadId || !Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) {
+    return c.json({ detail: "Invalid uploadId or partNumber." }, 400);
+  }
+
+  const chunk = new Uint8Array(await c.req.arrayBuffer());
+  if (chunk.byteLength === 0) {
+    return c.json({ detail: "Empty upload chunk." }, 400);
+  }
+
+  const res = await s3.send(
+    new UploadPartCommand({
+      Bucket: VIDEOS_BUCKET,
+      Key: grant.object_key,
+      UploadId: uploadId,
+      PartNumber: partNumber,
+      Body: chunk,
+    })
+  );
+  return c.json({ part_number: partNumber, etag: res.ETag || "", bytes: chunk.byteLength });
+});
+
+app.post("/storage/multipart/complete", async (c) => {
+  if (!s3) {
+    return c.json({ detail: "Neon Object Storage is not configured." }, 503);
+  }
+  const grant = verifyUploadToken(c.req.header("x-upload-token"));
+  if (!grant) {
+    return c.json({ detail: "Invalid or expired upload token." }, 401);
+  }
+  const body = await c.req.json<{
+    upload_id?: string;
+    parts?: Array<{ part_number: number; etag: string }>;
+    file_size_bytes?: number;
+    content_type?: string;
+  }>();
+  if (!body.upload_id || !Array.isArray(body.parts) || body.parts.length === 0) {
+    return c.json({ detail: "Missing upload_id or parts list." }, 400);
+  }
+
+  const sortedParts = [...body.parts]
+    .sort((a, b) => a.part_number - b.part_number)
+    .map((p) => ({ PartNumber: p.part_number, ETag: p.etag }));
+
+  await s3.send(
+    new CompleteMultipartUploadCommand({
+      Bucket: VIDEOS_BUCKET,
+      Key: grant.object_key,
+      UploadId: body.upload_id,
+      MultipartUpload: { Parts: sortedParts },
+    })
+  );
+
+  return c.json(
+    {
+      ok: true,
+      object_key: grant.object_key,
+      file_size_bytes: body.file_size_bytes || 0,
+      content_type: body.content_type || "video/mp4",
+    },
+    201
+  );
+});
+
+app.post("/storage/multipart/abort", async (c) => {
+  if (!s3) return c.json({ ok: true });
+  const grant = verifyUploadToken(c.req.header("x-upload-token"));
+  if (!grant) return c.json({ detail: "Invalid upload token." }, 401);
+  try {
+    const body = await c.req.json<{ upload_id?: string }>();
+    if (body?.upload_id) {
+      await s3.send(
+        new AbortMultipartUploadCommand({
+          Bucket: VIDEOS_BUCKET,
+          Key: grant.object_key,
+          UploadId: body.upload_id,
+        })
+      );
+    }
+  } catch {
+    // Best-effort cleanup
+  }
+  return c.json({ ok: true });
 });
 
 app.get("/storage/download", async (c) => {
