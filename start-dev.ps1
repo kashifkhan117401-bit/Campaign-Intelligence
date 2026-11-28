@@ -9,7 +9,7 @@ Start-Process powershell -ArgumentList @(
 
 Start-Process powershell -ArgumentList @(
     "-NoExit",
-    "-Command", 
+    "-Command",
     "Set-Location '$root'; npm.cmd --prefix frontend run dev"
 )
 
